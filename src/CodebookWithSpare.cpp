@@ -15,175 +15,6 @@
 #include <chrono>
 #include <omp.h>
 
-#define GROUP_SIZE_LIST {2, 2, 32}
-class mycomp 
-{
-public:
-    bool operator()(const std::pair<float, int>& a, const std::pair<float, int>& b) {
-        return a.first < b.first;
-    }
-};
-// Function to compute the mean codebook pyramid for a given codebook
-void mean_pyramid(const MatrixXfR &codebook, std::vector<MatrixXfR> &pyramid, const std::vector<int> &group_size_list = GROUP_SIZE_LIST) 
-{
-    int base_len = codebook.cols();
-    for (size_t layer = 0; layer < group_size_list.size(); ++layer) {
-        int group_size = group_size_list[layer];
-        int current_layer_cols = base_len / group_size;
-        MatrixXfR current_layer(codebook.rows(), current_layer_cols);
-        for (int i = 0; i < codebook.rows(); ++i) {
-            for (int j = 0; j < current_layer_cols; ++j) {
-                if (layer == 0) {
-                    current_layer(i, j) = codebook.row(i).segment(j * group_size, group_size).mean();
-                } else {
-                    current_layer(i, j) = pyramid.back().row(i).segment(j * group_size, group_size).mean();
-                }
-            }
-        }
-        pyramid.push_back(current_layer);
-        base_len = current_layer_cols;
-    }
-}
-
-void sort_base_on_top_pyramid(MatrixXfR &codebook, std::vector<MatrixXfR> &pyramid, const std::vector<int> &group_size_list = GROUP_SIZE_LIST) 
-{
-    std::vector<std::pair<float, int>> top_values(codebook.rows());
-    MatrixXfR &top_layer = pyramid.back(); // Get the top layer of the pyramid
-
-    for (int i = 0; i < codebook.rows(); ++i) {
-        top_values[i] = {top_layer.row(i).mean(), i};
-    }
-
-    // Sort the indices based on the mean values
-    std::sort(top_values.begin(), top_values.end(), mycomp());
-
-    // Create a copy of the pyramid and the codebook to rearrange them
-    std::vector<MatrixXfR> new_pyramid = pyramid;
-    MatrixXfR new_codebook = codebook;
-
-    for (size_t layer = 0; layer < pyramid.size(); ++layer) {
-        for (int i = 0; i < codebook.rows(); ++i) {
-            new_pyramid[layer].row(i) = pyramid[layer].row(top_values[i].second);
-        }
-    }
-
-    for (int i = 0; i < codebook.rows(); ++i) {
-        new_codebook.row(i) = codebook.row(top_values[i].second);
-    }
-
-    // Update the original pyramid and codebook with the rearranged ones
-    pyramid = new_pyramid;
-    codebook = new_codebook;
-}
-
-// Fast search algorithm function
-void fast_search_algorithm(
-    const MatrixXfR &des, 
-    const MatrixXfR &codebook, 
-    const std::vector<MatrixXfR> &codebook_pyramid, 
-    MatrixXiR &indices,
-    MatrixXfR &distances,
-    std::vector<int> &reject_num_list,
-    const std::vector<int> &group_size_list = GROUP_SIZE_LIST) 
-{
-    std::vector<MatrixXfR> des_pyramid;
-    mean_pyramid(des, des_pyramid);
-    float min_dist = std::numeric_limits<float>::infinity();
-
-    // First layer
-    // MatrixXfR top_layer = codebook_pyramid.back();
-    // MatrixXfR des_top_layer = des_pyramid.back();
-    // int closest_index = 0;
-    // float closest_dist = (des_top_layer.row(0) - top_layer.row(0)).squaredNorm();
-    // for (int i = 1; i < top_layer.rows(); ++i) {
-    //     float dist = (des_top_layer.row(0) - top_layer.row(i)).squaredNorm();
-    //     if (dist < closest_dist) {
-    //         closest_dist = dist;
-    //         closest_index = i;
-    //     }
-    // }
-    // min_dist = (des.row(0) - codebook.row(closest_index)).squaredNorm();
-    // std::cout << "closest_index: " << closest_index << std::endl;
-    // std::cout << "closest_dist: " << closest_dist << std::endl;
-    // std::cout << "min_dist: " << min_dist << std::endl;
-    //closest_codeword = closest_index;
-    
-    // Use binary search to find the closest row in the sorted top layer
-    const MatrixXfR &des_top_layer = des_pyramid.back();
-    const MatrixXfR &sorted_top_layer = codebook_pyramid.back();
-    int low = 0, high = sorted_top_layer.rows() - 1;
-    float closest_dist = std::numeric_limits<float>::max();
-    int closest_index = -1;
-
-    while (low <= high) {
-        int mid = low + (high - low) / 2;
-        float dist = (des_top_layer.row(0) - sorted_top_layer.row(mid)).squaredNorm();
-
-        if (dist < closest_dist) {
-            closest_dist = dist;
-            closest_index = mid;
-        }
-
-        if (des_top_layer.row(0).mean() < sorted_top_layer.row(mid).mean()) {
-            high = mid - 1;
-        } else {
-            low = mid + 1;
-        }
-    }
-    // Find the closest index in the original top layer using the sorted index
-    // closest_index = top_values[closest_index].second;
-
-    // Calculate the minimum distance using the closest index
-    min_dist = (des.row(0) - codebook.row(closest_index)).squaredNorm();
-    // std::cout << "closest_index: " << closest_index << std::endl;
-    // std::cout << "min_dist: " << min_dist << std::endl;
-
-    // Reject based on the codebook_pyramid
-    // std::vector<int> reject_num_list(group_size_list.size(), 0);
-    int reject_num = 0;
-    std::vector<std::pair<float, int>> dists(codebook.rows());
-    for (int y = 0; y < codebook.rows(); ++y) {
-        bool reject = false;
-        int level = des_pyramid.size() - 2;
-        float group_size = 1.0;
-        for (size_t i = 0; i < group_size_list.size() - 1; ++i) {
-            group_size *= group_size_list[i];
-        }
-        while (level >= 0) {
-            float dist = (des_pyramid[level].row(0) - codebook_pyramid[level].row(y)).squaredNorm();
-            // if (y < 10)
-            // {
-            //     std::cout << "level: " << level <<" dist: "<<dist<<std::endl;
-            //     std::cout <<"after *group_size dist: "<<dist* group_size<<std::endl;
-            // }
-            if (dist * group_size > min_dist) {
-                reject = true;
-                reject_num_list[level]++;
-                reject_num++;
-                break;
-            }
-            group_size /= group_size_list[level];
-            level--;
-        }
-        if (!reject) {
-            float dist = (codebook.row(y) - des.row(0)).squaredNorm();
-            if (dist < min_dist) {
-                min_dist = dist;
-                closest_index = y;
-            }
-        }
-    }
-    // std::ofstream out;
-    // out.open("reject_num_list.txt", std::ios_base::app);
-    // for (size_t i = 0; i < reject_num_list.size(); ++i) {
-    //     out << "reject_num_list[" << i << "]: " << reject_num_list[i] << std::endl;
-    // }
-    indices(0, 0) = closest_index;
-    distances(0, 0) = min_dist;
-    return ;
-}
-
-
 int Codebook::load_codebook (const std::string& codebook_path) 
 {
     std::ifstream file(codebook_path);
@@ -227,32 +58,16 @@ int Codebook::load_codebook (const std::string& codebook_path)
 
     // mean_pyramid(centroids, codebook_pyramid);
     // sort_base_on_top_pyramid(centroids, codebook_pyramid);
-    // print top of pyramid to txt
-    // std::ofstream out("codebook_pyramid_1.txt");
-    // out << std::setprecision(18) << codebook_pyramid[0] << std::endl;
-    // out.close();
-    // out.open("codebook_pyramid_2.txt");
-    // out << std::setprecision(18) << codebook_pyramid[1] << std::endl;
-    // out.close();
-    // out.open("codebook_pyramid_3.txt");
-    // out << std::setprecision(18) << codebook_pyramid[2] << std::endl;
-    // out.close();
-    // // print evry layer of pyramid size
-    // for (size_t i = 0; i < codebook_pyramid.size(); ++i) {
-    //     std::cout << "codebook_pyramid[" << i << "]: " << codebook_pyramid[i].rows() << " " << codebook_pyramid[i].cols() << std::endl;
-    // }
-
     return 0;
 }
 
-void Codebook::load_codebook_info (const std::string& codebook_info_path) 
+void Codebook::load_codebook_info(const std::string& codebook_info_path) 
 {
     for (int i = 0; i < main_size; ++i) {
         bi_index_id.insert({i, i});
     }
     bi_index_id.insert({-1, -1});
     bi_spare_index_id.insert({-1, -1});
-
     for (int i = 0; i < main_size; ++i) {
         min_heap.push(std::make_pair(i, 0));
     }
@@ -316,12 +131,13 @@ void Codebook::check_and_swap()
             auto it2 = bi_spare_index_id.left.find(max_index);
             if (it1 != bi_index_id.left.end() && it2 != bi_spare_index_id.left.end()) {
                 // Store the original values
-                int temp1 = it1->second;
-                int temp2 = it2->second;
-
+                int id1 = it1->second;
+                int id2 = it2->second;
+                // Swap the id in spare
+                std::swap(id_in_spare[id1], id_in_spare[id2]);
                 // Modify the entries
-                bi_index_id.left.replace_data(it1, temp2);
-                bi_spare_index_id.left.replace_data(it2, temp1);
+                bi_index_id.left.replace_data(it1, id2);
+                bi_spare_index_id.left.replace_data(it2, id1);
             }
             min_heap.pop();
             max_heap.pop();
@@ -331,9 +147,8 @@ void Codebook::check_and_swap()
 
             total_swap_times++;
             swap_flag = true;
-        } else {
+        } else 
             break;
-        }
     }
 
     for (const auto& item : push_to_min_heap) {
@@ -347,13 +162,11 @@ void Codebook::check_and_swap()
     }
 }
 
-int Codebook::quantize_for_add(
+int Codebook::quantize_and_update(
     const MatrixXfR& des, 
     //const std::vector<int>& image_ids, 
     const int multiple_assignment, 
-    MatrixXiR& indices, 
-    MatrixXfR& spare_des,
-    MatrixXiR& spare_indices) 
+    MatrixXiR& indices) 
 {
     indices.resize(des.rows(), multiple_assignment);
     MatrixXfR distances(des.rows(), multiple_assignment);
@@ -373,58 +186,24 @@ int Codebook::quantize_for_add(
     auto t1 = std::chrono::high_resolution_clock::now();
     // std::chrono::duration<double> duration = t1 - t0;
     std::cout << "main time taken: " << std::chrono::duration_cast<DurationMs>(t1 - t0).count() << " ms" << std::endl;
-    // // Perform fast search algorithm
-    // MatrixXiR fast_indices(1, 1);
-    // MatrixXfR fast_distances(1, 1);
-    // std::vector<int> reject_num_list(5, 0);
-    // auto t2 = std::chrono::high_resolution_clock::now();
-    // fast_search_algorithm(des, centroids, codebook_pyramid, fast_indices, fast_distances, reject_num_list);
-    // auto t3 = std::chrono::high_resolution_clock::now();
-    // //duration = t3 - t2;
-    // std::ofstream out;
-    // out.open("reject_num_list.txt", std::ios_base::app);
-    // for (size_t i = 0; i < reject_num_list.size(); ++i) {
-    //     out << "reject_num_list[" << i << "]: " << reject_num_list[i] << std::endl;
-    // }
-    // out << "fast time taken: " << std::chrono::duration_cast<DurationMs>(t3 - t2).count() << " ms" << std::endl;
-    // out.close();
-    // mean_fast_knn_time += (t3 - t2);
-    // std::cout << "fast time taken: " << std::chrono::duration_cast<DurationMs>(t3 - t2).count() << " ms" << std::endl;
-    // std::cout << "fast_indices: " << fast_indices(0, 0) << std::endl;
-    // std::cout << "fast_distances: " << fast_distances(0, 0) << std::endl;
-    // MatrixXiR tran_indices(1, 1);
-    // MatrixXfR tran_distances(1, 1);
-    // auto t4 = std::chrono::high_resolution_clock::now();
-    // bfknn_cpu(centroids, des.row(0), 1, tran_indices, tran_distances);
-    // auto t5 = std::chrono::high_resolution_clock::now();
-    // // duration = t5 - t4;
-    // mean_tranditional_knn_time += (t5 - t4);
-    // countt++;
-    // std::cout << "tranditional time taken: " << std::chrono::duration_cast<DurationMs>(t5 - t4).count() << " ms" << std::endl;
-    // std::cout << "tran_indices: " << tran_indices(0, 0) << std::endl;
-    // std::cout << "tran_distances: " << tran_distances(0, 0) << std::endl;
-    // if (fast_indices(0, 0) != tran_indices(0, 0) || fast_distances(0, 0) != tran_distances(0, 0)) {
-    //     std::cout << "fast search algorithm error" << std::endl;
-    // }
-
     // Process the results
-    std::vector<int> delete_indices;
+    std::vector<int> to_spare_indices;
     for (int i = 0; i < des.rows(); ++i) {
         if (distances(i, 0) < cluster_radius[indices(i, 0)]) {
             update_main_frequency(indices(i, 0));
         } else {
-            delete_indices.push_back(i);
+            to_spare_indices.push_back(i);
+            indices(i, 0) = -1;
         }
     }
     // Create spare_des and update centroid_indices
-    spare_des.resize(delete_indices.size(), des.cols());
-    for (int i = 0; i < delete_indices.size(); ++i) {
-        spare_des.row(i) = des.row(delete_indices[i]);
-        indices(delete_indices[i], 0) = -1;
-    }
+    // spare_des.resize(to_spare_indices.size(), des.cols());
+    // for (int i = 0; i < to_spare_indices.size(); ++i) {
+    //     spare_des.row(i) = des.row(to_spare_indices[i]);
+    //     indices(to_spare_indices[i], 0) = -1;
+    // }
     // preprocess spare des 
-    t0 = std::chrono::high_resolution_clock::now();
-    spare_indices.resize(spare_des.rows(), 1);
+    //spare_indices.resize(spare_des.rows(), 1);
     // MatrixXiR in_spare_indices(spare_des.rows(), 2);
     // MatrixXfR in_spare_distances(spare_des.rows(), 2);
     // Args in_spare_arg;
@@ -477,25 +256,25 @@ int Codebook::quantize_for_add(
     //     }
     //     std::cout << std::endl;
     // }
-
-    for (int i = 0; i < spare_des.rows(); ++i) {
+    t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < to_spare_indices.size(); ++i) {
         if (spare_size == 0) {
-            add_spare_centroid(spare_des.row(i));
-            spare_indices(i, 0) = 0;
+            add_spare_centroid(des.row(to_spare_indices[i]));
+            //spare_indices(i, 0) = 0;
         }
         else {
             // Perform k-NN search on spare centroids
             MatrixXiR spare_indices_tmp(1, multiple_assignment);
             MatrixXfR spare_distances_tmp(1, multiple_assignment);
-            bfknn_cpu(spare_centroids, spare_des.row(i), multiple_assignment, spare_indices_tmp, spare_distances_tmp);
+            bfknn_cpu(spare_centroids, des.row(to_spare_indices[i]), multiple_assignment, spare_indices_tmp, spare_distances_tmp);
             int spare_centroid_index = spare_indices_tmp(0, 0);
             float spare_distance = spare_distances_tmp(0, 0);
             if (spare_distance < spare_cluster_radius[spare_centroid_index]) {
                 update_spare_frequency(spare_centroid_index);
-                spare_indices(i, 0) = spare_centroid_index;
+                //spare_indices(i, 0) = spare_centroid_index;
             } else {
-                add_spare_centroid(spare_des.row(i));
-                spare_indices(i, 0) = spare_size - 1;
+                add_spare_centroid(des.row(to_spare_indices[i]));
+                //spare_indices(i, 0) = spare_size - 1;
             }
         }
     }
@@ -505,7 +284,7 @@ int Codebook::quantize_for_add(
     std::cout << "spare time taken: " << duration.count() << " ms"<< std::endl;
     return 0;
 }
-int Codebook::quantize_for_search(
+int Codebook::quantize(
     const MatrixXfR& des, 
     int multiple_assignment, 
     MatrixXiR& indices) 
@@ -550,6 +329,7 @@ void Codebook::add_spare_centroid(const MatrixXfR& des)
     // Expand spare counts and spare index2id
     max_heap.push(std::make_pair(spare_size, 0));
     bi_spare_index_id.insert({spare_size, main_size + spare_size});
+    id_in_spare.push_back(true);
     spare_size += 1;
 }
 void Codebook::get_id_by_index(std::vector<int>& indices) 
@@ -560,6 +340,19 @@ void Codebook::get_id_by_index(std::vector<int>& indices)
             indices[i] = it->second;
         } else {
             indices[i] = -1; // Or some default invalid value
+        }
+    }
+}
+void Codebook::get_id_by_index(MatrixXiR &indices) 
+{
+    for (int i = 0; i < indices.rows(); ++i) {
+        for (int j = 0; j < indices.cols(); ++j) {
+            auto it = bi_index_id.left.find(indices(i, j));
+            if (it != bi_index_id.left.end()) {
+                indices(i, j) = it->second;
+            } else {
+                indices(i, j) = -1;
+            }
         }
     }
 }
@@ -574,6 +367,14 @@ void Codebook::get_spare_id_by_index(std::vector<int>& indices)
         }
     }
 }
+
+class mycomp 
+{
+public:
+    bool operator()(const std::pair<float, int>& a, const std::pair<float, int>& b) {
+        return a.first < b.first;
+    }
+};
 // Perform kNN on CPU search
 void Codebook::bfknn_cpu(
     const MatrixXfR &centorids, 

@@ -10,25 +10,39 @@
 #include <iostream>
 #include <algorithm>
 
-// MatrixXfR normalize_vec_l2(const MatrixXfR &vecs) {
-//     MatrixXfR norm = vecs.rowwise().norm();
-//     norm = norm.array() + 1e-6;
-//     return vecs.array().colwise() / norm.array();
-// }
-
-// std::pair<std::vector<int>, Eigen::VectorXf> asmk_kernel(const Eigen::VectorXf &sim, const std::vector<int> &image_ids, float alpha, float similarity_threshold) {
-//     std::vector<int> filtered_ids;
-//     std::vector<float> filtered_sim;
-
-//     for (int i = 0; i < sim.size(); ++i) {
-//         if (sim[i] >= similarity_threshold) {
-//             filtered_ids.push_back(image_ids[i]);
-//             filtered_sim.push_back(std::pow(sim[i], alpha));
-//         }
-//     }
-
-//     return {filtered_ids, Eigen::Map<Eigen::VectorXf>(filtered_sim.data(), filtered_sim.size())};
-// }
+// Function to compute similarity between query vector and database feature vectors
+void compute_similarity(
+    const MatrixXuiR &qvec, 
+    const MatrixXuiR &vecs, 
+    const std::vector<int> &image_ids,
+    float alpha, 
+    float similarity_threshold,
+    std::vector<int> &filtered_image_ids, 
+    std::vector<double> &filtered_sim) 
+{
+    MatrixXdR norm_hdist = hamming_cdist_packed(qvec, vecs);
+    // Convert to similarity measure
+    MatrixXdR sim = norm_hdist.cast<double>().array() * -2 + 1;
+    for (int i = 0; i < sim.cols(); ++i) {
+        if (sim(0, i) >= similarity_threshold) {
+            filtered_image_ids.push_back(image_ids[i]);
+            filtered_sim.push_back(std::pow(sim(0, i), alpha));
+        }
+    }
+}
+// Function to compute similarity between 2 aggregated descriptors
+double compute_similarity(
+    const MatrixXuiR &vec1, 
+    const MatrixXuiR &vec2, 
+    float alpha, 
+    float similarity_threshold) 
+{
+    MatrixXdR norm_hdist = hamming_cdist_packed(vec1, vec2);
+    // Convert to similarity measure
+    MatrixXdR sim = norm_hdist.cast<double>().array() * -2 + 1;
+    if (sim(0, 0) >= similarity_threshold) return std::pow(sim(0, 0), alpha);
+    return sim(0, 0);
+}
 
 void aggregate_words(
     const MatrixXfR &des, 

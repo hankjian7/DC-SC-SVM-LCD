@@ -1,6 +1,6 @@
 #include "GlobalDefine.hpp"
 #include "InvertedFile.hpp"
-#include "Hamming.hpp"
+#include "Kernel.hpp"
 #include "utility.hpp"
 #include <iostream>
 #include <vector>
@@ -33,26 +33,7 @@ void get_ZScores(const std::vector<double>& strengths, std::vector<double>& z_sc
     }
     return;
 }
-// Function to compute similarity between query vector and database feature vectors
-void compute_similarity(
-    const MatrixXuiR &qvec, 
-    const MatrixXuiR &vecs, 
-    const std::vector<int> &image_ids,
-    float alpha, 
-    float similarity_threshold,
-    std::vector<int> &filtered_image_ids, 
-    std::vector<double> &filtered_sim) 
-{
-    MatrixXdR norm_hdist = hamming_cdist_packed(qvec, vecs);
-    // Convert to similarity measure
-    MatrixXdR sim = norm_hdist.cast<double>().array() * -2 + 1;
-    for (int i = 0; i < sim.cols(); ++i) {
-        if (sim(0, i) >= similarity_threshold) {
-            filtered_image_ids.push_back(image_ids[i]);
-            filtered_sim.push_back(std::pow(sim(0, i), alpha));
-        }
-    }
-}
+
 // Constructor
 IVF::IVF(
     const std::vector<float> &norm_factor, 
@@ -154,9 +135,14 @@ void IVF::search(
             image_id_set.insert(image_id);
         }
     }
-    for (int image_id : image_id_set) {
-        scores[image_id] /= std::sqrt(q_norm_factor);
-    }
+    // Normalize scores by q_norm_factor
+    double sqrt_q_norm_factor = std::sqrt(q_norm_factor);
+    std::transform(scores.begin(), scores.end(), scores.begin(),
+               [sqrt_q_norm_factor](double score) { return score / sqrt_q_norm_factor; });
+    // Normalize scores by norm_factor
+    // for (int image_id : image_id_set) {
+    //     scores[image_id] /= std::sqrt(norm_factor[image_id]);
+    // }
 
     std::vector<int> tmp_topk_imids(scores.size());
     std::iota(tmp_topk_imids.begin(), tmp_topk_imids.end(), 0);
