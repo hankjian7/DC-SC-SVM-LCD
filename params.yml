@@ -21,8 +21,15 @@ evaluation:
       scales: [1] # Scales for multiscale inference
     asmk:
       __template__: _asmk_how_fire.yml # Load from a separate file 
-  lcd:
-    non_search_time: 40 #consuming time in non-search area 
-    frame_rate: 10 # frame rate of the video
-    delta: 0.3 #threshold of temporal consistency
-    
+lcd:
+  scene_change_checktimes: 1 # Check times for scene change
+codebook:
+  codebook_size: 65536 # Size of the codebook
+  feature_num: 512 # Number of local features
+  feature_dim: 128 # Dimension of the local features
+  multiple_assignment: 1 # Number of assignments per local feature
+similarity:
+  alpha: 3.0 # Weight of the spatial similarity
+  similarity_threshold: 0.0 # Threshold for the similarity matrix
+  scene_change_threshold: 0.0 # Threshold for the scene change
+  topk_scene: 3 # Threshold for the scene change

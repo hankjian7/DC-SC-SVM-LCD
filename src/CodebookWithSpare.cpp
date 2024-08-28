@@ -181,11 +181,7 @@ int Codebook::quantize_and_update(
     bfknn_arg.outIndices = indices.data();
     bfknn_arg.outDistances = distances.data();
     queries_to_device(dev_resources, (float*)des.data(), bfknn_arg.numQueries, bfknn_arg.dims, memory);
-    auto t0 = std::chrono::high_resolution_clock::now();
     bfknn(dev_resources, bfknn_arg, memory);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    // std::chrono::duration<double> duration = t1 - t0;
-    std::cout << "main time taken: " << std::chrono::duration_cast<DurationMs>(t1 - t0).count() << " ms" << std::endl;
     // Process the results
     std::vector<int> to_spare_indices;
     for (int i = 0; i < des.rows(); ++i) {
@@ -256,7 +252,6 @@ int Codebook::quantize_and_update(
     //     }
     //     std::cout << std::endl;
     // }
-    t0 = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < to_spare_indices.size(); ++i) {
         if (spare_size == 0) {
             add_spare_centroid(des.row(to_spare_indices[i]));
@@ -278,10 +273,6 @@ int Codebook::quantize_and_update(
             }
         }
     }
-    t1 = std::chrono::high_resolution_clock::now();
-    DurationMs duration = t1 - t0;
-    max_spare_time = std::max(max_spare_time, duration);
-    std::cout << "spare time taken: " << duration.count() << " ms"<< std::endl;
     return 0;
 }
 int Codebook::quantize(
@@ -331,6 +322,10 @@ void Codebook::add_spare_centroid(const MatrixXfR& des)
     bi_spare_index_id.insert({spare_size, main_size + spare_size});
     id_in_spare.push_back(true);
     spare_size += 1;
+}
+int Codebook::get_capacity() 
+{
+    return main_size + spare_capacity;
 }
 void Codebook::get_id_by_index(std::vector<int>& indices) 
 {

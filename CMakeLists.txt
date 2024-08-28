@@ -52,12 +52,11 @@ set(SOURCES
     src/bfknn_raft.cu
     src/MinHeapWithTracking.cpp
     src/Hamming.cpp
-    src/Kernel.cpp
-    src/InvertedFile.cpp
+    src/Searcher.cpp
     src/CodebookWithSpare.cpp
-    src/LcdEngine.cpp
-    # src/test_pyramid.cpp
+    src/LCDEngine.cpp
+    # src/SCDEngine.cpp
 )
-add_executable(LcdEngine ${SOURCES})
-target_link_libraries(LcdEngine PRIVATE yaml-cpp)
-target_link_libraries(LcdEngine PUBLIC raft::raft raft::compiled Eigen3::Eigen OpenMP::OpenMP_CXX ${Boost_LIBRARIES} ${OpenCV_LIBS})
+add_executable(LCDEngine ${SOURCES})
+target_link_libraries(LCDEngine PRIVATE yaml-cpp)
+target_link_libraries(LCDEngine PUBLIC raft::raft raft::compiled Eigen3::Eigen OpenMP::OpenMP_CXX ${Boost_LIBRARIES} ${OpenCV_LIBS})

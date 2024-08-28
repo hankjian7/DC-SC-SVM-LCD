@@ -1,10 +1,14 @@
 #include "GlobalDefine.hpp"
+#include "Hamming.hpp"
 #include <iostream>
 #include <vector>
 #include <cmath>
 #include <cassert>
+#include <unordered_set>
 #include <Eigen/Dense>
 #include <bitset>
+#include <tuple>
+#include <algorithm>
 
 using namespace Eigen;
 
@@ -114,41 +118,198 @@ MatrixXdR hamming_cdist_packed(const MatrixXuiR& arr1, const MatrixXuiR& arr2, f
 
     return result;
 }
+namespace Hamming
+{
+    // Compute similarity between query vector and database feature vectors
+    void compute_similarity(
+        const MatrixXuiR &qvec, 
+        const MatrixXuiR &vecs, 
+        const std::vector<int> &image_ids,
+        float alpha, 
+        float similarity_threshold,
+        std::vector<int> &filtered_image_ids, 
+        std::vector<double> &filtered_sim) 
+    {
+        MatrixXdR norm_hdist = hamming_cdist_packed(qvec, vecs);
+        // Convert to similarity measure
+        MatrixXdR sim = norm_hdist.cast<double>().array() * -2 + 1;
+        for (int i = 0; i < sim.cols(); ++i) {
+            if (sim(0, i) >= similarity_threshold) {
+                filtered_image_ids.push_back(image_ids[i]);
+                filtered_sim.push_back(std::pow(sim(0, i), alpha));
+            }
+        }
+    }
+    // Compute similarity between 2 aggregated descriptors in picture
+    double compute_similarity(
+        const MatrixXuiR &agg_des1, 
+        const std::vector<int> &agg_words1,
+        const MatrixXuiR &agg_des2,
+        const std::vector<int> &agg_words2, 
+        float alpha,
+        float similarity_threshold)
+    {
+        std::unordered_map<int, int> map1;
+        std::vector<std::pair<int, int>> common_elements_with_indices;
+        
+        // Populate the map with elements from vec1 and their indices
+        for (size_t i = 0; i < agg_words1.size(); ++i) {
+            map1[agg_words1[i]] = i;
+        }
 
-// int main() {
-//     // // Test binarize_and_pack
-//     // std::vector<float> arr = {0.1, 0.5, 0.6, 0.9, -0.2, -0.1, 0.3, 0.7, 0.8, 0.2};
-//     // auto packed = binarize_and_pack(arr);
-//     // std::cout << "Packed: ";
-//     // for (const auto& p : packed) {
-//     //     std::cout << std::bitset<32>(p) << " ";
-//     // }
-//     // std::cout << std::endl;
+        // Iterate through vec2 and find common elements with their indices
+        for (size_t j = 0; j < agg_words2.size(); ++j) {
+            if (map1.find(agg_words2[j]) != map1.end()) {
+                common_elements_with_indices.emplace_back(map1[agg_words2[j]], j);
+            }
+        }
+        
+        double score = 0.0;
+        int n = common_elements_with_indices.size();
+        for (int i = 0; i < n; ++i) {
+            int idx1 = common_elements_with_indices[i].first;
+            int idx2 = common_elements_with_indices[i].second;
+            MatrixXdR norm_hdist = hamming_cdist_packed(agg_des1.row(idx1), agg_des2.row(idx2));
+            // Convert to similarity measure
+            MatrixXdR sim = norm_hdist.cast<double>().array() * -2 + 1;
+            if (sim(0, 0) >= similarity_threshold) score += std::pow(sim(0, 0), alpha);
+            else score += sim(0, 0);
+        }
+        
+        score /= std::sqrt(agg_words1.size());
+        score /= std::sqrt(agg_words2.size());
+        return score;
+    }
+    // Function to compute similarity between 2 aggregated descriptors in image
+    double compute_similarity_with_weights(
+        const MatrixXuiR &agg_des1, 
+        const std::vector<int> &agg_words1,
+        const MatrixXuiR &agg_des2,
+        const std::vector<int> &agg_words2, 
+        const std::vector<double> &agg_weights,
+        float alpha,
+        float similarity_threshold)
+    {
+        std::unordered_map<int, int> map1;
+        std::vector<std::pair<int, int>> common_elements_with_indices;
+        
+        // Populate the map with elements from vec1 and their indices
+        for (size_t i = 0; i < agg_words1.size(); ++i) {
+            map1[agg_words1[i]] = i;
+        }
 
-//     // // Test binarize_and_pack_2D
-//     // MatrixXfR mat(2, 10);
-//     // mat << 0.1, 0.5, 0.6, 0.9, -0.2, -0.1, 0.3, 0.7, 0.8, 0.2,
-//     //        0.2, 0.4, 0.5, 0.6, -0.3, -0.2, 0.4, 0.6, 0.7, 0.3;
-//     // auto packed2D = binarize_and_pack_2D(mat);
-//     // std::cout << "Packed 2D: " << std::endl << packed2D << std::endl;
+        // Iterate through vec2 and find common elements with their indices
+        for (size_t j = 0; j < agg_words2.size(); ++j) {
+            if (map1.find(agg_words2[j]) != map1.end()) {
+                common_elements_with_indices.emplace_back(map1[agg_words2[j]], j);
+            }
+        }
+        
+        double score = 0.0;
+        int n = common_elements_with_indices.size();
+        for (int i = 0; i < n; ++i) {
+            int idx1 = common_elements_with_indices[i].first;
+            int idx2 = common_elements_with_indices[i].second;
+            MatrixXdR norm_hdist = hamming_cdist_packed(agg_des1.row(idx1), agg_des2.row(idx2));
+            // Convert to similarity measure
+            double sim = norm_hdist(0, 0) * -2 + 1;
+            double tmp_score = (sim >= similarity_threshold) ? std::pow(sim, alpha) : sim;
+            score += tmp_score * agg_weights[idx1];
+        }
+        
+        score /= std::sqrt(agg_words1.size());
+        score /= std::sqrt(agg_words2.size());
+        return score;
+    }
 
-//     // // Test hamming_dist_packed
-//     // std::vector<unsigned int> n1 = {3}; // 00000011
-//     // std::vector<unsigned int> n2 = {1}; // 00000001
-//     // float hamming_dist = hamming_dist_packed(n1, n2, 2);
-//     // std::cout << "Hamming distance: " << hamming_dist << std::endl;
+    void aggregate_words(
+        const MatrixXfR &des, 
+        const MatrixXiR &word_indices, 
+        const MatrixXfR &centroids, 
+        MatrixXuiR &agg_binary_des,
+        std::vector<int> &unique_indices) 
+    {
+        std::unordered_set<int> unique_indices_set;
+        unique_indices_set.insert(word_indices.data(), word_indices.data()+word_indices.size());
+        unique_indices_set.erase(-1);  // Remove -1
+        unique_indices = std::vector<int>(unique_indices_set.begin(), unique_indices_set.end());
+        MatrixXfR agg_des(unique_indices.size(), des.cols());
 
-//     // Test hamming_cdist_packed
-//     // MatrixXuiR mat1(1, 5);
-//     // mat1 << 1, 2, 3, 4, 5;
-//     // MatrixXuiR mat2(3, 5);
-//     // mat2 << 1, 2, 3, 4, 5,
-//     //         6, 7, 8, 9, 10,
-//     //         11, 12, 13, 14, 15;
-//     // MatrixXfR hamming_cdist = hamming_cdist_packed(mat1, mat2, 2);
-    
-//     // std::cout << "Hamming cdist shape: \n rows:" << hamming_cdist.rows() << " cols:" << hamming_cdist.cols() << std::endl;
-//     // std::cout << "Hamming cdist: " << std::endl << hamming_cdist << std::endl;
+        for (size_t i = 0; i < unique_indices.size(); ++i) {
+            std::vector<int> selected_indices;
+            for (size_t j = 0; j < word_indices.rows(); ++j) {
+                for (size_t k = 0; k < word_indices.cols(); ++k) {
+                    if (word_indices(j, k) == unique_indices[i]) {
+                        selected_indices.push_back(j);
+                        break;
+                    }
+                }
+            }
+            MatrixXfR selected_des(selected_indices.size(), des.cols());
+            for (size_t j = 0; j < selected_indices.size(); ++j) {
+                selected_des.row(j) = des.row(selected_indices[j]);
+            }
 
-//     // return 0;
-// }
+            Eigen::VectorXf centroid;
+            centroid = centroids.row(unique_indices[i]);
+
+            MatrixXfR diff = selected_des.rowwise() - centroid.transpose();
+            Eigen::VectorXf sum = diff.colwise().sum();
+            agg_des.row(i) = sum;
+        }
+        agg_binary_des = binarize_and_pack_2D(agg_des);
+        return;
+    }
+    void aggregate_with_weights(
+        const MatrixXfR &des, 
+        const MatrixXiR &word_indices, 
+        const MatrixXfR &centroids,
+        const std::vector<double> &weights, 
+        MatrixXuiR &agg_des,
+        std::vector<int> &agg_words,
+        std::vector<double> &agg_weights)
+    {
+        std::vector<int> unique_indices;
+        aggregate_words(des, word_indices, centroids, agg_des, unique_indices);
+        agg_weights = std::vector<double>(unique_indices.size(), 0);
+        for (size_t i = 0; i < unique_indices.size(); ++i) {
+            std::vector<int> selected_indices;
+            for (size_t j = 0; j < word_indices.rows(); ++j) {
+                for (size_t k = 0; k < word_indices.cols(); ++k) {
+                    if (word_indices(j, k) == unique_indices[i]) {
+                        selected_indices.push_back(j);
+                        break;
+                    }
+                }
+            }
+            double max_strength = 0;
+            for (size_t j = 0; j < selected_indices.size(); ++j) {
+                max_strength = std::max(max_strength, weights[selected_indices[j]]);
+            }
+            agg_weights[i] = max_strength;
+        }
+        agg_words = unique_indices;
+        // std::cout << "agg_words size "<< agg_words.size() << std::endl;
+        return;
+    }
+
+    void aggregate(
+        const MatrixXfR &des, 
+        const MatrixXiR &word_indices, 
+        const std::vector<int> &image_ids, 
+        const MatrixXfR &centroids,
+        MatrixXuiR &agg_des,
+        std::vector<int> &agg_words,
+        std::vector<int> &agg_imids)
+    {
+        std::unordered_set<int> unique_image_ids(image_ids.begin(), image_ids.end());
+        if (unique_image_ids.size() == 1)
+        {
+            std::vector<int> unique_idices;
+            aggregate_words(des, word_indices, centroids, agg_des, unique_idices);
+            agg_words = unique_idices;
+            agg_imids = std::vector<int>(unique_idices.size(), *unique_image_ids.begin());
+            std::cout << "agg_words size "<< agg_words.size() << std::endl;
+        }
+    }
+}

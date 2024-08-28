@@ -45,6 +45,7 @@ public:
         int multiple_assignment, 
         MatrixXiR &indices, 
         MatrixXfR &distances);
+    int get_capacity(); 
     void get_id_by_index(std::vector<int> &indices);
     void get_id_by_index(MatrixXiR &indices);
     void get_spare_id_by_index(std::vector<int> &indices);

@@ -1,8 +1,7 @@
 #include "CodebookWithSpare.hpp"
 #include "GlobalDefine.hpp"
-#include "Kernel.hpp"
-#include "InvertedFile.hpp"
-#include "utility.hpp"
+#include "Hamming.hpp"
+#include "Searcher.hpp"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -21,7 +20,6 @@ using std::vector;
 using std::tuple;
 using std::cout;
 using std::endl;
-//typedef std::pair<MatrixXfR, vector<double>> DesStrengthPair;
 
 void _load_imagelist(const string& image_list_path, string& root, vector<string>& imgs) {
     std::ifstream file(image_list_path);
@@ -75,7 +73,7 @@ int get_descriptor(const string image_des_path, MatrixXfR& des) {
 
     // Map the values to an Eigen matrix
     des.resize(rows, cols);
-    #pragma omp parallel for
+    // #pragma omp parallel for
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             des(i, j) = values[i * cols + j];
@@ -104,42 +102,6 @@ int get_strengths (const string strengths_path, vector<double> &strengths) {
         return 1;
     }
     return 0;
-}
-bool scene_change_detection(
-    const MatrixXuiR& agg_des1, 
-    const std::vector<int>& agg_words1,
-    const MatrixXuiR& agg_des2,
-    const std::vector<int>& agg_words2, 
-    double scene_change_threshold)
-{
-    std::unordered_map<int, int> map1;
-    std::vector<std::pair<int, int>> common_elements_with_indices;
-    
-    // Populate the map with elements from vec1 and their indices
-    for (size_t i = 0; i < agg_words1.size(); ++i) {
-        map1[agg_words1[i]] = i;
-    }
-
-    // Iterate through vec2 and find common elements with their indices
-    for (size_t j = 0; j < agg_words2.size(); ++j) {
-        if (map1.find(agg_words2[j]) != map1.end()) {
-            common_elements_with_indices.emplace_back(map1[agg_words2[j]], j);
-        }
-    }
-    
-    double score = 0.0;
-    int n = common_elements_with_indices.size();
-    
-    #pragma omp parallel for reduction(+:score) // Parallelize the loop and reduce the score
-    for (int i = 0; i < n; ++i) {
-        int idx1 = common_elements_with_indices[i].first;
-        int idx2 = common_elements_with_indices[i].second;
-        score += compute_similarity(agg_des1.row(idx1), agg_des2.row(idx2), 3.0f, 0.0f);
-    }
-    
-    score /= std::sqrt(agg_words1.size());
-    score /= std::sqrt(agg_words2.size());
-    return score <= scene_change_threshold;
 }
 int show_image(string window, string query_path, string result_path) {
 
@@ -200,7 +162,7 @@ int show_image(string window, string query_path, string result_path) {
 
     return 0;
 }
-int draw_histogram(vector<int> histogram)
+int draw_histogram(vector<double> histogram)
 {    
     // Find the maximum value in the histogram for normalization
     int max_value = *std::max_element(histogram.begin(), histogram.end());
@@ -225,11 +187,46 @@ int draw_histogram(vector<int> histogram)
 
     return 0;
 }
+void find_feature_matches(cv::Mat img1, cv::Mat img2, vector<cv::KeyPoint> &kps1, vector<cv::KeyPoint> &kps2, vector<cv::DMatch> &matches){
+    cv::Mat descripions1, descripions2;
+    cv::Ptr<cv::FeatureDetector> detector = cv::ORB::create();
+    cv::Ptr<cv::DescriptorExtractor> extractor = cv::ORB::create();
+    cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create("BruteForce-Hamming"); //汉明距离
+
+    detector->detect(img1, kps1);
+    detector->detect(img2, kps2);
+    extractor->compute(img1, kps1, descripions1);
+    extractor->compute(img2, kps2, descripions2);
+    matcher->match(descripions1, descripions2, matches);
+
+    //匹配点筛选
+    auto min_max = minmax_element(matches.begin(), matches.end(),
+                                  [](const cv::DMatch &m1, const cv::DMatch &m2){return m1.distance < m2.distance;}
+    ); //计算最小距离和最大距离
+    double min_dist = min_max.first->distance;
+    double max_dist = min_max.second->distance;
+
+    vector<cv::DMatch> good_matches;
+    for(int i = 0; i < descripions1.rows; i++){
+        if (matches[i].distance <= std::max(2 * min_dist, 30.0)){
+            good_matches.push_back(matches[i]);
+        }
+    }
+    matches = good_matches;
+}
+inline void increment_histogram(vector<double> &histogram, const MatrixXiR &words) {
+    for (int i = 0; i < words.rows(); ++i) {
+        for (int j = 0; j < words.cols(); ++j) {
+            if (words(i, j) == -1) continue;
+            histogram[words(i, j)]++;
+        }
+    }
+}
 // 假設 compute_pairs 函數的定義如下
 int LcdEngine(const string &img_list,
                 const string &parameters,
                 const string &model_load,
-                const int topk,
+                int topk,
                 const string &output_path,
                 const string &codebook_cache_path,
                 const string &codebook_info_path,
@@ -243,26 +240,34 @@ int LcdEngine(const string &img_list,
     _load_imagelist(img_list, dbroot, dbimgs);
 
     YAML::Node config = YAML::LoadFile(parameters);
-    int non_search_time = config["lcd"]["non_search_time"].as<int>();
-    int frame_rate = config["lcd"]["frame_rate"].as<int>();
+    int scene_change_checktimes =  config["lcd"]["scene_change_checktimes"].as<int>();
     int codebook_size = config["codebook"]["codebook_size"].as<int>();
+    int feature_num = config["codebook"]["feature_num"].as<int>();
+    int feature_dim = config["codebook"]["feature_dim"].as<int>();
     int multiple_assignment = config["codebook"]["multiple_assignment"].as<int>();
     float alpha = config["similarity"]["alpha"].as<float>();
     float similarity_threshold = config["similarity"]["similarity_threshold"].as<float>();
-    int non_search_area = non_search_time * frame_rate;
-    cout << "non_search_time: " << non_search_time << endl;
-    cout << "frame_rate: " << frame_rate << endl;
-
+    float scene_change_threshold =  config["similarity"]["scene_change_threshold"].as<float>();
+    int topk_scene =  config["similarity"]["topk_scene"].as<int>();
+    DurationMs mean_loop_time = DurationMs(0);
+    DurationMs mean_quantize_time = DurationMs(0);
+    DurationMs mean_add_time = DurationMs(0);
+    DurationMs mean_search_time = DurationMs(0);
+    int search_start = 0;
     // initialize codebook
-    Codebook codebook(65536, 512, 128);
+    Codebook codebook(codebook_size, feature_num, feature_dim);
     cout << "Codebook loaded" << endl;
     codebook.load_codebook(codebook_cache_path);
     codebook.load_codebook_info(codebook_info_path);
     cout << "Codebook size: " << codebook.centroids.rows() << "x" << codebook.centroids.cols() << endl;
-    IVF ivf = IVF::initialize_empty(65536, false, 3.0f, 0.0f);
+    // initialize searcher
+    Searcher searcher = Searcher::initialize_empty(alpha, similarity_threshold, scene_change_threshold, topk_scene);
+    // Tmp use for scene change detection
+    Scene scene;
+    vector<double> histogram(codebook_size, 0);
+    int continuous_low_score_count = 0;
+    std::queue<tuple<MatrixXiR, MatrixXuiR, vector<int>, int>> q;
     int number_of_iteration = dbimgs.size();
-    
-    std::queue<tuple<MatrixXiR, MatrixXuiR, vector<int>>> q;
     std::ofstream output(output_path);
     if (!output.is_open()) {
         std::cerr << "Error opening output file" << endl;
@@ -272,9 +277,10 @@ int LcdEngine(const string &img_list,
     // Create a window for display
     if (show_video)
         cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+    // Main loop
     for (int imid = 0; imid < number_of_iteration; ++imid) {
         string dbimgs_it = dbimgs[imid];
-        cout << dbimgs_it << endl;
+        // cout << dbimgs_it << endl;
         string image_path = dbroot + "/" + dbimgs_it;
         string image_des_path = des_path + "/" + dbimgs_it + ".txt";
         string strengths_path = des_path + "/" + dbimgs_it + ".strengths.txt";
@@ -285,59 +291,106 @@ int LcdEngine(const string &img_list,
         get_descriptor(image_des_path, des);
         auto end = std::chrono::high_resolution_clock::now();
         get_strengths(strengths_path, weights);
-        cout << "reading feature time: " << std::chrono::duration_cast<DurationMs>(end - start).count() << " ms" << endl;
-        //
+        // cout << "reading feature time: " << std::chrono::duration_cast<DurationMs>(end - start).count() << " ms" << endl;
+        
+        auto start_loop = std::chrono::high_resolution_clock::now();
         // Perform quantize
-        //
         MatrixXiR words;
         int multiple_assignment = 1;
         start = std::chrono::high_resolution_clock::now();
         codebook.quantize_and_update(des, multiple_assignment, words);
         end = std::chrono::high_resolution_clock::now();
-        cout << "quantize_and_update time: " << std::chrono::duration_cast<DurationMs>(end - start).count() << " ms" << endl;
-        //
+        mean_quantize_time += std::chrono::duration_cast<DurationMs>(end - start);
         // Perform aggregate
-        //
-        vector<int> image_ids(des.rows(), imid);
         MatrixXuiR agg_des;
         vector<int> agg_words;
-        vector<int> agg_imids;
         vector<double> agg_weights;
-        aggregate_with_weights(des, words, image_ids, codebook.centroids, weights, agg_des, agg_words, agg_imids, agg_weights);
+        Hamming::aggregate_with_weights(des, words, codebook.centroids, weights, agg_des, agg_words, agg_weights);
         codebook.get_id_by_index(words);
         codebook.get_id_by_index(agg_words);
         codebook.check_and_swap();
-        
-        if (q.size() >= non_search_area) {
-            tuple<MatrixXiR, MatrixXuiR, vector<int>> pre = q.front();
-            MatrixXiR pre_words = std::get<0>(pre);
-            MatrixXuiR pre_agg_des = std::get<1>(pre);
-            vector<int> pre_agg_words = std::get<2>(pre);
-            int pre_imid = imid - non_search_area;
-            q.pop();
-            //
-            // Perform add
-            //
-            vector<int> pre_agg_imids(pre_agg_words.size(), pre_imid);
-            cout << "perform add" << endl;
-            ivf.add(pre_agg_des, pre_agg_words, pre_agg_imids);
-            //
-            // Perform search
-            //
+        // extended histogram
+        if (histogram.size() < codebook.get_capacity()) {
+            histogram.resize(codebook.get_capacity(), 0);
+        }
+        start = std::chrono::high_resolution_clock::now();
+        // Perform scene change detection and add to searcher
+        if (imid == 0) {
+            scene.add(agg_des, agg_words, imid);
+            increment_histogram(histogram, words);
+        }
+        else if (Hamming::compute_similarity(scene.agg_des_vecs[0], scene.agg_words_vecs[0], agg_des, agg_words, alpha, similarity_threshold) < 0.0f) {
+            if (continuous_low_score_count < scene_change_checktimes-1) {
+                q.push(tuple<MatrixXiR, MatrixXuiR, vector<int>, int>(words, agg_des, agg_words, imid));
+                continuous_low_score_count++;
+            }
+            else {
+                searcher.add_scene(scene, histogram);
+                scene.clear();
+                histogram.assign(histogram.size(), 0);
+                if (q.size() != scene_change_checktimes-1)
+                    throw std::runtime_error("Queue size is not scene_change_checktimes-1");
+                while (!q.empty()) {
+                    tuple<MatrixXiR, MatrixXuiR, vector<int>, int> pre = q.front();
+                    MatrixXiR pre_words = std::get<0>(pre);
+                    MatrixXuiR pre_agg_des = std::get<1>(pre);
+                    vector<int> pre_agg_words = std::get<2>(pre);
+                    int pre_imid = std::get<3>(pre);
+                    q.pop();
+                    increment_histogram(histogram, pre_words);
+                    scene.add(pre_agg_des, pre_agg_words, pre_imid);
+                }
+                increment_histogram(histogram, words);
+                scene.add(agg_des, agg_words, imid);
+                continuous_low_score_count = 0;  // Reset the counter
+                // cout<< "# of scene: " << searcher.scenes.size() << endl;
+                // cout<< "# of histogram: " << searcher.histograms.size() << endl;
+                // cout<< "# of image: s" << searcher.n_images << endl;
+                // cout << "Every scene's imagelist:" << endl;
+                // for (int i = 0; i < searcher.scenes.size(); ++i) {
+                //     cout << "Scene " << i << ":\n";
+                //     for (int j = 0; j < searcher.scenes[i].agg_image_ids_vecs.size(); ++j) {
+                //         cout << searcher.scenes[i].agg_image_ids_vecs[j] << ", ";
+                //     }
+                //     cout << endl;
+                // }
+
+            }
+        }
+        else {
+            while (!q.empty()) {
+                tuple<MatrixXiR, MatrixXuiR, vector<int>, int> pre = q.front();
+                MatrixXiR pre_words = std::get<0>(pre);
+                MatrixXuiR pre_agg_des = std::get<1>(pre);
+                vector<int> pre_agg_words = std::get<2>(pre);
+                int pre_imid = std::get<3>(pre);
+                q.pop();
+                increment_histogram(histogram, pre_words);
+                scene.add(pre_agg_des, pre_agg_words, pre_imid);
+            } 
+            scene.add(agg_des, agg_words, imid);
+            increment_histogram(histogram, words);
+            continuous_low_score_count = 0;  // Reset the counter if score > 0.0
+        }
+        end = std::chrono::high_resolution_clock::now();
+        mean_add_time += std::chrono::duration_cast<DurationMs>(end - start); 
+        //
+        // Perform search
+        //
+        if (searcher.histograms.size() > 2)
+        {
+            if (search_start == 0) {
+                search_start = imid;
+            }
             vector<int> topk_imid;
             vector<double> topk_scores;
-            cout << "perform search" << endl;
-            agg_weights = vector<double>(agg_weights.size(), 1.0);
-            ivf.search(agg_des, agg_words, agg_weights, topk, topk_imid, topk_scores);
-            cout << "Top results: ";
-            for (const auto &idx : topk_imid) {
-                cout << idx << " ";
-            }
-            cout << "\nScores: ";
-            for (const auto &score : topk_scores) {
-                cout << score << " ";
-            }
-            cout << "\n";
+            vector<double> query_histogram(codebook.get_capacity(), 0);
+            increment_histogram(query_histogram, words);
+            auto search_start = std::chrono::high_resolution_clock::now();
+            searcher.search(query_histogram, agg_des, agg_words, agg_weights, topk, topk_imid, topk_scores);
+            auto search_end = std::chrono::high_resolution_clock::now();
+            mean_search_time += std::chrono::duration_cast<DurationMs>(search_end - search_start);
+            //cout << "search time: " << std::chrono::duration_cast<DurationMs>(search_end - search_start).count() << " ms" << endl;
             for (int i = 0; i < topk_imid.size(); ++i) {
                 output << dbimgs_it << ", " 
                     << dbimgs[topk_imid[i]] << ", " 
@@ -347,13 +400,29 @@ int LcdEngine(const string &img_list,
                 if (show_video) 
                     show_image(window_name, image_path, result_path);
             }
-            cout << "max spare time: " << codebook.max_spare_time.count() << " ms"<< endl;
         }
         else output << dbimgs_it << ", " 
             << dbimgs_it << ", " 
             << 0 << '\n';
-        q.push(tuple<MatrixXiR, MatrixXuiR, vector<int>>(words, agg_des, agg_words));
+        auto end_loop = std::chrono::high_resolution_clock::now();
+        mean_loop_time += std::chrono::duration_cast<DurationMs>(end_loop - start_loop);
     }
+    // cout<< "# of scene: " << searcher.scenes.size() << endl;
+    // cout<< "# of histogram: " << searcher.histograms.size() << endl;
+    // cout<< "# of image: s" << searcher.n_images << endl;
+    // cout << "Every scene's imagelist:" << endl;
+    // for (int i = 0; i < searcher.scenes.size(); ++i) {
+    //     cout << "Scene " << i << ":\n";
+    //     for (int j = 0; j < searcher.scenes[i].agg_image_ids_vecs.size(); ++j) {
+    //         cout << searcher.scenes[i].agg_image_ids_vecs[j] << ", ";
+    //     }
+    //     cout << endl;
+    // }
+    cout << "mean loop time: " << mean_loop_time.count() / number_of_iteration << " ms" << endl;
+    cout << "mean quantize time: " << mean_quantize_time.count() / number_of_iteration << " ms" << endl;
+    cout << "mean add time: " << mean_add_time.count() / number_of_iteration << " ms" << endl;
+    cout << "mean search time: " << mean_search_time.count() / (number_of_iteration-search_start-1) << " ms" << endl;
+
     // Destroy the window after the display duration
     if (show_video)
         cv::destroyWindow(window_name);
@@ -378,7 +447,7 @@ int main(int argc, char* argv[]) {
     string des_path;
     bool show_video;
 
-    po::options_description desc("Compute pairs using HOW or FIRe");
+    po::options_description desc("LCD Engine");
     desc.add_options()
         ("help,h", "produce help message")
         ("parameters", po::value<string>(&parameters)->default_value("eval_fire.yml"), "path to a yaml file that contains parameters.")
@@ -428,7 +497,7 @@ int main(int argc, char* argv[]) {
     // BOOST_LOG_TRIVIAL(debug) << "codebook_cache_path: " << codebook_cache_path;
     // BOOST_LOG_TRIVIAL(debug) << "codebook_info_path: " << codebook_info_path;
     // BOOST_LOG_TRIVIAL(debug) << "ivf_cache_path: " << ivf_cache_path;
-    cout << "compute_pairs called with the following parameters:" << endl;
+    cout << "LCD engine called with the following parameters:" << endl;
     cout << "img_list: " << img_list << endl;
     cout << "parameters: " << parameters << endl;
     cout << "topk: " << topk << endl;
@@ -442,3 +511,48 @@ int main(int argc, char* argv[]) {
     
     return 0;
 }
+// if (q.size() >= non_search_area) {
+//     tuple<MatrixXiR, MatrixXuiR, vector<int>, int> pre = q.front();
+//     MatrixXiR pre_words = std::get<0>(pre);
+//     MatrixXuiR pre_agg_des = std::get<1>(pre);
+//     vector<int> pre_agg_words = std::get<2>(pre);
+//     int pre_imid = imid - non_search_area;
+//     q.pop();
+//     //
+//     // Perform add
+//     //
+//     vector<int> pre_agg_imids(pre_agg_words.size(), pre_imid);
+//     cout << "perform add" << endl;
+//     ivf.add(pre_agg_des, pre_agg_words, pre_agg_imids);
+//     //
+//     // Perform search
+//     //
+//     vector<int> topk_imid;
+//     vector<double> topk_scores;
+//     cout << "perform search" << endl;
+//     agg_weights = vector<double>(agg_weights.size(), 1.0);
+//     ivf.search(agg_des, agg_words, agg_weights, topk, topk_imid, topk_scores);
+//     cout << "Top results: ";
+//     for (const auto &idx : topk_imid) {
+//         cout << idx << " ";
+//     }
+//     cout << "\nScores: ";
+//     for (const auto &score : topk_scores) {
+//         cout << score << " ";
+//     }
+//     cout << "\n";
+//     for (int i = 0; i < topk_imid.size(); ++i) {
+//         output << dbimgs_it << ", " 
+//             << dbimgs[topk_imid[i]] << ", " 
+//             << topk_scores[i] << '\n';
+//                 // Read the image file
+//         string result_path = dbroot + "/" + dbimgs[topk_imid[i]];
+//         if (show_video) 
+//             show_image(window_name, image_path, result_path);
+//     }
+//     cout << "max spare time: " << codebook.max_spare_time.count() << " ms"<< endl;
+// }
+// else output << dbimgs_it << ", " 
+//     << dbimgs_it << ", " 
+//     << 0 << '\n';
+// q.push(tuple<MatrixXiR, MatrixXuiR, vector<int>, int>(words, agg_des, agg_words, imid));
