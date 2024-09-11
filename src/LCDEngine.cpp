@@ -2,6 +2,7 @@
 #include "GlobalDefine.hpp"
 #include "Hamming.hpp"
 #include "Searcher.hpp"
+#include "Matching.hpp"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -228,6 +229,7 @@ int LcdEngine(const string &img_list,
                 const string &model_load,
                 int topk,
                 const string &output_path,
+                const string &scene_output_path,
                 const string &codebook_cache_path,
                 const string &codebook_info_path,
                 const string &des_path,
@@ -253,6 +255,8 @@ int LcdEngine(const string &img_list,
     DurationMs mean_quantize_time = DurationMs(0);
     DurationMs mean_add_time = DurationMs(0);
     DurationMs mean_search_time = DurationMs(0);
+    DurationMs mean_surf_time = DurationMs(0);
+    DurationMs mean_svm_time = DurationMs(0);
     int search_start = 0;
     // initialize codebook
     Codebook codebook(codebook_size, feature_num, feature_dim);
@@ -266,6 +270,7 @@ int LcdEngine(const string &img_list,
     Scene scene;
     vector<double> histogram(codebook_size, 0);
     int continuous_low_score_count = 0;
+    int additional_scene_id = -1;
     std::queue<tuple<MatrixXiR, MatrixXuiR, vector<int>, int>> q;
     int number_of_iteration = dbimgs.size();
     std::ofstream output(output_path);
@@ -278,6 +283,7 @@ int LcdEngine(const string &img_list,
     if (show_video)
         cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
     // Main loop
+    cout << "Start loop closure detection" << endl;
     for (int imid = 0; imid < number_of_iteration; ++imid) {
         string dbimgs_it = dbimgs[imid];
         // cout << dbimgs_it << endl;
@@ -287,19 +293,19 @@ int LcdEngine(const string &img_list,
         MatrixXfR des;
         vector<double> strengths;
         vector<double> weights;
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
         get_descriptor(image_des_path, des);
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         get_strengths(strengths_path, weights);
         // cout << "reading feature time: " << std::chrono::duration_cast<DurationMs>(end - start).count() << " ms" << endl;
         
-        auto start_loop = std::chrono::high_resolution_clock::now();
+        auto start_loop = std::chrono::steady_clock::now();
         // Perform quantize
         MatrixXiR words;
         int multiple_assignment = 1;
-        start = std::chrono::high_resolution_clock::now();
+        start = std::chrono::steady_clock::now();
         codebook.quantize_and_update(des, multiple_assignment, words);
-        end = std::chrono::high_resolution_clock::now();
+        end = std::chrono::steady_clock::now();
         mean_quantize_time += std::chrono::duration_cast<DurationMs>(end - start);
         // Perform aggregate
         MatrixXuiR agg_des;
@@ -313,7 +319,7 @@ int LcdEngine(const string &img_list,
         if (histogram.size() < codebook.get_capacity()) {
             histogram.resize(codebook.get_capacity(), 0);
         }
-        start = std::chrono::high_resolution_clock::now();
+        start = std::chrono::steady_clock::now();
         // Perform scene change detection and add to searcher
         if (imid == 0) {
             scene.add(agg_des, agg_words, imid);
@@ -343,14 +349,25 @@ int LcdEngine(const string &img_list,
                 increment_histogram(histogram, words);
                 scene.add(agg_des, agg_words, imid);
                 continuous_low_score_count = 0;  // Reset the counter
+                // double max_score = -1.0;
+                // int max_scene_id = -1;
+                // int candidate_scene_n = searcher.scenes.size();
+                // for (int j = 0; j < candidate_scene_n-2; ++j) {
+                //     double score = Hamming::compute_similarity(searcher.scenes[j].agg_des_vecs[0], searcher.scenes[j].agg_words_vecs[0], agg_des, agg_words, alpha, similarity_threshold);
+                //     if (score > max_score) {
+                //         max_score = score;
+                //         max_scene_id = j;
+                //     }
+                // }
+                // additional_scene_id = max_scene_id;
                 // cout<< "# of scene: " << searcher.scenes.size() << endl;
                 // cout<< "# of histogram: " << searcher.histograms.size() << endl;
                 // cout<< "# of image: s" << searcher.n_images << endl;
                 // cout << "Every scene's imagelist:" << endl;
                 // for (int i = 0; i < searcher.scenes.size(); ++i) {
                 //     cout << "Scene " << i << ":\n";
-                //     for (int j = 0; j < searcher.scenes[i].agg_image_ids_vecs.size(); ++j) {
-                //         cout << searcher.scenes[i].agg_image_ids_vecs[j] << ", ";
+                //     for (int j = 0; j < searcher.scenes[i].imid_vecs.size(); ++j) {
+                //         cout << searcher.scenes[i].imid_vecs[j] << ", ";
                 //     }
                 //     cout << endl;
                 // }
@@ -372,7 +389,7 @@ int LcdEngine(const string &img_list,
             increment_histogram(histogram, words);
             continuous_low_score_count = 0;  // Reset the counter if score > 0.0
         }
-        end = std::chrono::high_resolution_clock::now();
+        end = std::chrono::steady_clock::now();
         mean_add_time += std::chrono::duration_cast<DurationMs>(end - start); 
         //
         // Perform search
@@ -386,15 +403,20 @@ int LcdEngine(const string &img_list,
             vector<double> topk_scores;
             vector<double> query_histogram(codebook.get_capacity(), 0);
             increment_histogram(query_histogram, words);
-            auto search_start = std::chrono::high_resolution_clock::now();
-            searcher.search(query_histogram, agg_des, agg_words, agg_weights, topk, topk_imid, topk_scores);
-            auto search_end = std::chrono::high_resolution_clock::now();
+            auto search_start = std::chrono::steady_clock::now();
+            searcher.search(query_histogram, agg_des, agg_words, agg_weights, additional_scene_id, topk, topk_imid, topk_scores);
+            auto search_end = std::chrono::steady_clock::now();
             mean_search_time += std::chrono::duration_cast<DurationMs>(search_end - search_start);
+            std::string result_image_path = dbroot + "/" + dbimgs[topk_imid[0]];
+            DurationMs surf_time, svm_time;
+            int inlier_number = Matching::matching(image_path, result_image_path, surf_time, svm_time);
+            mean_svm_time += svm_time;
+            mean_surf_time += surf_time;
             //cout << "search time: " << std::chrono::duration_cast<DurationMs>(search_end - search_start).count() << " ms" << endl;
             for (int i = 0; i < topk_imid.size(); ++i) {
                 output << dbimgs_it << ", " 
                     << dbimgs[topk_imid[i]] << ", " 
-                    << topk_scores[i] << '\n';
+                    << inlier_number << '\n';
                         // Read the image file
                 string result_path = dbroot + "/" + dbimgs[topk_imid[i]];
                 if (show_video) 
@@ -404,25 +426,41 @@ int LcdEngine(const string &img_list,
         else output << dbimgs_it << ", " 
             << dbimgs_it << ", " 
             << 0 << '\n';
-        auto end_loop = std::chrono::high_resolution_clock::now();
+        auto end_loop = std::chrono::steady_clock::now();
         mean_loop_time += std::chrono::duration_cast<DurationMs>(end_loop - start_loop);
     }
-    // cout<< "# of scene: " << searcher.scenes.size() << endl;
-    // cout<< "# of histogram: " << searcher.histograms.size() << endl;
-    // cout<< "# of image: s" << searcher.n_images << endl;
-    // cout << "Every scene's imagelist:" << endl;
-    // for (int i = 0; i < searcher.scenes.size(); ++i) {
-    //     cout << "Scene " << i << ":\n";
-    //     for (int j = 0; j < searcher.scenes[i].agg_image_ids_vecs.size(); ++j) {
-    //         cout << searcher.scenes[i].agg_image_ids_vecs[j] << ", ";
-    //     }
-    //     cout << endl;
-    // }
-    cout << "mean loop time: " << mean_loop_time.count() / number_of_iteration << " ms" << endl;
-    cout << "mean quantize time: " << mean_quantize_time.count() / number_of_iteration << " ms" << endl;
-    cout << "mean add time: " << mean_add_time.count() / number_of_iteration << " ms" << endl;
-    cout << "mean search time: " << mean_search_time.count() / (number_of_iteration-search_start-1) << " ms" << endl;
+    std::ofstream scene_output(scene_output_path);
+    if (!scene_output.is_open()) {
+        std::cerr << "Error opening scene output file" << endl;
+        return -1;
+    }
 
+    scene_output << "# of scene: " << searcher.scenes.size() << endl;
+    scene_output << "# of histogram: " << searcher.histograms.size() << endl;
+    scene_output << "# of image: s" << searcher.n_images << endl;
+    scene_output << "Every scene's imagelist:" << endl;
+    for (int i = 0; i < searcher.scenes.size(); ++i) {
+        scene_output << "Scene " << i << ":\n";
+        for (int j = 0; j < searcher.scenes[i].imid_vecs.size(); ++j) {
+            scene_output << searcher.scenes[i].imid_vecs[j] << ", ";
+        }
+        scene_output << endl;
+    }
+    scene_output.close();
+    std::ofstream time_output;
+    time_output.open("./time.txt", std::ios_base::app);
+    if (!time_output.is_open()) {
+        std::cerr << "Error opening time output file" << endl;
+        return -1;
+    }
+    time_output << dbroot << endl;
+    time_output << "mean loop time: " << mean_loop_time.count() / number_of_iteration << " ms" << endl;
+    time_output << "mean quantize time: " << mean_quantize_time.count() / number_of_iteration << " ms" << endl;
+    time_output << "mean add time: " << mean_add_time.count() / number_of_iteration << " ms" << endl;
+    time_output << "mean search time: " << mean_search_time.count() / (number_of_iteration-search_start-1) << " ms" << endl;
+    time_output << "mean surf time: " << mean_surf_time.count() / (number_of_iteration-search_start-1) << " ms" << endl;
+    time_output << "mean svm time: " << mean_svm_time.count() / (number_of_iteration-search_start-1) << " ms" << endl;
+    time_output.close();
     // Destroy the window after the display duration
     if (show_video)
         cv::destroyWindow(window_name);
@@ -438,6 +476,7 @@ int main(int argc, char* argv[]) {
     string data_folder;
     string img_list;
     string output;
+    string scene_output;
     string codebook_cache_path;
     string codebook_info_path;
     string ivf_cache_path;
@@ -454,6 +493,7 @@ int main(int argc, char* argv[]) {
         ("model-load,ml", po::value<string>(&model_load)->default_value(""), "checkpoint path (overwrites demo_eval.net_path)")
         ("img_list", po::value<string>(&img_list)->required(), "input list directory.")
         ("output,o", po::value<string>(&output)->required(), "output path to pairs text file")
+        ("scene-output", po::value<string>(&scene_output)->required(), "output path file which contains every scene in dataset")
         ("codebook-cache-path,c", po::value<string>(&codebook_cache_path)->default_value(""), "path to store the codebook")
         ("codebook-info-path", po::value<string>(&codebook_info_path)->default_value(""), "path to store the codebook info")
         ("topk", po::value<int>(&topk)->default_value(50), "max number of images per query in output pairs")
@@ -502,12 +542,13 @@ int main(int argc, char* argv[]) {
     cout << "parameters: " << parameters << endl;
     cout << "topk: " << topk << endl;
     cout << "output: " << output << endl;
+    cout << "scene_output: " << scene_output << endl;
     cout << "codebook_cache_path: " << codebook_cache_path << endl;
     cout << "codebook_info_path: " << codebook_info_path << endl;
     cout << "des_path: " << des_path << endl;
     cout << "show_video: " << show_video << endl;
 
-    LcdEngine(img_list, parameters, model_load, topk, output, codebook_cache_path, codebook_info_path, des_path, show_video);
+    LcdEngine(img_list, parameters, model_load, topk, output, scene_output, codebook_cache_path, codebook_info_path, des_path, show_video);
     
     return 0;
 }

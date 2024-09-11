@@ -15,7 +15,7 @@ public:
     void clear();
     std::vector<MatrixXuiR> agg_des_vecs;
     std::vector<std::vector<int>> agg_words_vecs;
-    std::vector<int> agg_image_ids_vecs;
+    std::vector<int> imid_vecs;
 };
 
 class Searcher {
@@ -42,6 +42,7 @@ public:
             const MatrixXuiR &agg_des, 
             const std::vector<int> &agg_word_ids, 
             const std::vector<double> &agg_weights,
+            int additional_scene_id,
             int topk, 
             std::vector<int> &topk_imids,
             std::vector<double> &topk_scores);

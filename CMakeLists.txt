@@ -49,6 +49,10 @@ include(cmake/thirdparty/get_raft.cmake)
 include_directories(header)
 # List all source files
 set(SOURCES
+    src/svm.cpp
+    src/CC_COOSAC.cpp
+    src/calculate.cpp
+    src/Matching.cpp
     src/bfknn_raft.cu
     src/MinHeapWithTracking.cpp
     src/Hamming.cpp

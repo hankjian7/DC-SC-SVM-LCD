@@ -32,4 +32,4 @@ similarity:
   alpha: 3.0 # Weight of the spatial similarity
   similarity_threshold: 0.0 # Threshold for the similarity matrix
   scene_change_threshold: 0.0 # Threshold for the scene change
-  topk_scene: 3 # Threshold for the scene change
+  topk_scene: 2 # Threshold for the scene change

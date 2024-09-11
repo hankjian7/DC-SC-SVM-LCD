@@ -69,13 +69,13 @@ void Scene::add(
 {
     agg_des_vecs.push_back(agg_des);
     agg_words_vecs.push_back(agg_words);
-    agg_image_ids_vecs.push_back(image_id);
+    imid_vecs.push_back(image_id);
 }
 void Scene::clear() 
 {
     agg_des_vecs.clear();
     agg_words_vecs.clear();
-    agg_image_ids_vecs.clear();
+    imid_vecs.clear();
 }
 // Static method to initialize an empty Searcher object
 Searcher Searcher::initialize_empty(float alpha, float similarity_threshold, float scene_change_threshold, int topk_scene) 
@@ -100,13 +100,14 @@ void Searcher::add_scene(Scene &scene, std::vector<double> &histogram)
     scenes.push_back(scene);
     normalize(histogram);
     histograms.push_back(histogram);
-    n_images += scene.agg_image_ids_vecs.size();
+    n_images += scene.imid_vecs.size();
 }
 void Searcher::search(
     std::vector<double> query_histogram,
     const MatrixXuiR &agg_des, 
     const std::vector<int> &agg_word_ids, 
     const std::vector<double> &agg_weights,
+    int additional_scene_id,
     int topk, 
     std::vector<int> &topk_imids,
     std::vector<double> &topk_scores) 
@@ -155,6 +156,12 @@ void Searcher::search(
     if (it == candidate_scenes.end()) {
         candidate_scenes.push_back(pre_scene_id);
     }
+    if (additional_scene_id != -1) {
+        it = std::find(candidate_scenes.begin(), candidate_scenes.end(), additional_scene_id);
+        if (it == candidate_scenes.end()) {
+            candidate_scenes.push_back(additional_scene_id);
+        }
+    }
     // std::cout << "Intersect Top " << topk << " images: ";
     // for (int i = 0; i < topk; ++i) {
     //     std::cout << inter_topk_scene[i] << " ";
@@ -173,16 +180,16 @@ void Searcher::search(
     // std::cout << "total histogram " << histograms.size() << ", " << "Bhattacharyya Top " << topk_scene << " :\n";
     // for (int i = 0; i < candidate_scenes; ++i) {
     //     std::cout << "scene " << bc_topk_scene[i] << ",";
-    //     std::cout << "image num:" << scenes[bc_topk_scene[i]].agg_image_ids_vecs.size() << "\n";
+    //     std::cout << "image num:" << scenes[bc_topk_scene[i]].imid_vecs.size() << "\n";
     // }
     // std::cout << std::endl;
     std::vector<std::tuple<int, int, double>> candidate; //scene_id, image_id, score
     for (int i = 0; i < candidate_scenes.size(); i++) {
         Scene &scene = scenes[candidate_scenes[i]];
-        for (int j = 0; j < scene.agg_image_ids_vecs.size(); j++) {
+        for (int j = 0; j < scene.imid_vecs.size(); j++) {
             double score = Hamming::compute_similarity(agg_des, agg_word_ids, scene.agg_des_vecs[j], scene.agg_words_vecs[j], alpha, similarity_threshold);
             //double score = Hamming::compute_similarity_with_weights(agg_des, agg_word_ids, scene.agg_des_vecs[j], scene.agg_words_vecs[j], agg_weights, alpha, similarity_threshold);
-            candidate.push_back(std::tuple<int, int, double>(candidate_scenes[i], scene.agg_image_ids_vecs[j], score));
+            candidate.push_back(std::tuple<int, int, double>(candidate_scenes[i], scene.imid_vecs[j], score));
         }
     }
     // Partially sort the candidate vector based on the score (third element in the tuple)

@@ -1,0 +1,5 @@
+.vscode/
+build/
+deprecation/
+CC_COOSAC/
+cmake/
