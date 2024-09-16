@@ -94,6 +94,7 @@ void Codebook::load_codebook_info(const std::string& codebook_info_path)
         cluster_radius.push_back(radius);
         spare_cluster_maxRadius = std::max(spare_cluster_maxRadius, radius);
     }
+    //cluster_radius.assign(cluster_radius.size(), spare_cluster_maxRadius);
 }
 inline void Codebook::update_main_frequency(int index) 
 {
@@ -164,8 +165,6 @@ void Codebook::check_and_swap()
 
 int Codebook::quantize_and_update(
     const MatrixXfR& des, 
-    //const std::vector<int>& image_ids, 
-    const int multiple_assignment, 
     MatrixXiR& indices) 
 {
     indices.resize(des.rows(), multiple_assignment);
@@ -277,7 +276,6 @@ int Codebook::quantize_and_update(
 }
 int Codebook::quantize(
     const MatrixXfR& des, 
-    int multiple_assignment, 
     MatrixXiR& indices) 
 {
     indices.resize(des.rows(), multiple_assignment);

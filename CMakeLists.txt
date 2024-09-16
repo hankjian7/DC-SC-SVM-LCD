@@ -50,14 +50,15 @@ include_directories(header)
 # List all source files
 set(SOURCES
     src/svm.cpp
-    src/CC_COOSAC.cpp
     src/calculate.cpp
-    src/Matching.cpp
+    src/SVMMatcher.cpp
     src/bfknn_raft.cu
     src/MinHeapWithTracking.cpp
+    # src/Aggregator.cpp
     src/Hamming.cpp
     src/Searcher.cpp
     src/CodebookWithSpare.cpp
+    # src/LCDEngine_no_binary.cpp
     src/LCDEngine.cpp
     # src/SCDEngine.cpp
 )

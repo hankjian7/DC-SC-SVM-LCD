@@ -227,31 +227,33 @@ namespace Hamming
         const MatrixXiR &word_indices, 
         const MatrixXfR &centroids, 
         MatrixXuiR &agg_binary_des,
-        std::vector<int> &unique_indices) 
+        std::vector<int> &agg_words,
+        std::vector<int> &word_counts)
     {
         std::unordered_set<int> unique_indices_set;
         unique_indices_set.insert(word_indices.data(), word_indices.data()+word_indices.size());
         unique_indices_set.erase(-1);  // Remove -1
-        unique_indices = std::vector<int>(unique_indices_set.begin(), unique_indices_set.end());
-        MatrixXfR agg_des(unique_indices.size(), des.cols());
+        agg_words = std::vector<int>(unique_indices_set.begin(), unique_indices_set.end());
+        MatrixXfR agg_des(agg_words.size(), des.cols());
 
-        for (size_t i = 0; i < unique_indices.size(); ++i) {
+        for (size_t i = 0; i < agg_words.size(); ++i) {
             std::vector<int> selected_indices;
             for (size_t j = 0; j < word_indices.rows(); ++j) {
                 for (size_t k = 0; k < word_indices.cols(); ++k) {
-                    if (word_indices(j, k) == unique_indices[i]) {
+                    if (word_indices(j, k) == agg_words[i]) {
                         selected_indices.push_back(j);
                         break;
                     }
                 }
             }
+            word_counts.push_back(selected_indices.size());
             MatrixXfR selected_des(selected_indices.size(), des.cols());
             for (size_t j = 0; j < selected_indices.size(); ++j) {
                 selected_des.row(j) = des.row(selected_indices[j]);
             }
 
             Eigen::VectorXf centroid;
-            centroid = centroids.row(unique_indices[i]);
+            centroid = centroids.row(agg_words[i]);
 
             MatrixXfR diff = selected_des.rowwise() - centroid.transpose();
             Eigen::VectorXf sum = diff.colwise().sum();
@@ -267,10 +269,11 @@ namespace Hamming
         const std::vector<double> &weights, 
         MatrixXuiR &agg_des,
         std::vector<int> &agg_words,
+        std::vector<int> &word_counts,
         std::vector<double> &agg_weights)
     {
         std::vector<int> unique_indices;
-        aggregate_words(des, word_indices, centroids, agg_des, unique_indices);
+        aggregate_words(des, word_indices, centroids, agg_des, unique_indices, word_counts);
         agg_weights = std::vector<double>(unique_indices.size(), 0);
         for (size_t i = 0; i < unique_indices.size(); ++i) {
             std::vector<int> selected_indices;
@@ -293,23 +296,23 @@ namespace Hamming
         return;
     }
 
-    void aggregate(
-        const MatrixXfR &des, 
-        const MatrixXiR &word_indices, 
-        const std::vector<int> &image_ids, 
-        const MatrixXfR &centroids,
-        MatrixXuiR &agg_des,
-        std::vector<int> &agg_words,
-        std::vector<int> &agg_imids)
-    {
-        std::unordered_set<int> unique_image_ids(image_ids.begin(), image_ids.end());
-        if (unique_image_ids.size() == 1)
-        {
-            std::vector<int> unique_idices;
-            aggregate_words(des, word_indices, centroids, agg_des, unique_idices);
-            agg_words = unique_idices;
-            agg_imids = std::vector<int>(unique_idices.size(), *unique_image_ids.begin());
-            std::cout << "agg_words size "<< agg_words.size() << std::endl;
-        }
-    }
+    // void aggregate(
+    //     const MatrixXfR &des, 
+    //     const MatrixXiR &word_indices, 
+    //     const std::vector<int> &image_ids, 
+    //     const MatrixXfR &centroids,
+    //     MatrixXuiR &agg_des,
+    //     std::vector<int> &agg_words,
+    //     std::vector<int> &agg_imids)
+    // {
+    //     std::unordered_set<int> unique_image_ids(image_ids.begin(), image_ids.end());
+    //     if (unique_image_ids.size() == 1)
+    //     {
+    //         std::vector<int> unique_idices;
+    //         aggregate_words(des, word_indices, centroids, agg_des, unique_idices);
+    //         agg_words = unique_idices;
+    //         agg_imids = std::vector<int>(unique_idices.size(), *unique_image_ids.begin());
+    //         std::cout << "agg_words size "<< agg_words.size() << std::endl;
+    //     }
+    // }
 }

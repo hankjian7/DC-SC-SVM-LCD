@@ -5,7 +5,8 @@
 #include <opencv2/opencv.hpp>
 #include "svm.hpp"
 
-using namespace std;
+using std::vector;
+using std::pair;
 using namespace cv;
 
 static int len_pitch = 20;

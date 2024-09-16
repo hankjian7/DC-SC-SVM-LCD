@@ -4,6 +4,14 @@
 #include <Eigen/Dense>
 namespace Hamming 
 {
+    void aggregate_words(
+        const MatrixXfR &des, 
+        const MatrixXiR &word_indices, 
+        const MatrixXfR &centroids, 
+        MatrixXuiR &agg_binary_des,
+        std::vector<int> &agg_words,
+        std::vector<int> &word_counts); 
+    
     void aggregate_with_weights(
         const MatrixXfR &des, 
         const MatrixXiR &word_indices, 
@@ -11,16 +19,8 @@ namespace Hamming
         const std::vector<double> &weights, 
         MatrixXuiR &agg_des,
         std::vector<int> &agg_words,
+        std::vector<int> &word_counts,
         std::vector<double> &agg_weights);
-
-    void aggregate(
-        const MatrixXfR &des, 
-        const MatrixXiR &word_indices, 
-        const std::vector<int> &image_ids, 
-        const MatrixXfR &centroids,
-        MatrixXuiR &agg_des,
-        std::vector<int> &agg_words,
-        std::vector<int> &agg_imids);
 
     void compute_similarity(
         const MatrixXuiR &qvec, 

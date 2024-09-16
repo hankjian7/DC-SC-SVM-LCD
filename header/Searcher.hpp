@@ -38,7 +38,7 @@ public:
     void add_scene(Scene &scene, std::vector<double> &histogram);
     // Search method
     void search(
-            std::vector<double> query_histogram,
+            std::vector<double> &query_histogram,
             const MatrixXuiR &agg_des, 
             const std::vector<int> &agg_word_ids, 
             const std::vector<double> &agg_weights,

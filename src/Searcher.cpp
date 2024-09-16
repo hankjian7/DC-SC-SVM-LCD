@@ -58,7 +58,9 @@ double bhattacharyyaDistance(const std::vector<double>& H1, const std::vector<do
     double bc = 0.0f;
     size_t size = std::min(H1.size(), H2.size());
     for (size_t i = 0; i < size; ++i) {
-        bc += std::sqrt(H1[i] * H2[i]);
+        if (H1[i] != 0 && H2[i] != 0) {
+            bc += std::sqrt(H1[i] * H2[i]);
+        }
     }
     return -std::log(bc);
 }
@@ -103,7 +105,7 @@ void Searcher::add_scene(Scene &scene, std::vector<double> &histogram)
     n_images += scene.imid_vecs.size();
 }
 void Searcher::search(
-    std::vector<double> query_histogram,
+    std::vector<double> &query_histogram,
     const MatrixXuiR &agg_des, 
     const std::vector<int> &agg_word_ids, 
     const std::vector<double> &agg_weights,
@@ -185,11 +187,33 @@ void Searcher::search(
     // std::cout << std::endl;
     std::vector<std::tuple<int, int, double>> candidate; //scene_id, image_id, score
     for (int i = 0; i < candidate_scenes.size(); i++) {
-        Scene &scene = scenes[candidate_scenes[i]];
+        int candidate_scene_id = candidate_scenes[i];
+        Scene &scene = scenes[candidate_scene_id];
         for (int j = 0; j < scene.imid_vecs.size(); j++) {
             double score = Hamming::compute_similarity(agg_des, agg_word_ids, scene.agg_des_vecs[j], scene.agg_words_vecs[j], alpha, similarity_threshold);
             //double score = Hamming::compute_similarity_with_weights(agg_des, agg_word_ids, scene.agg_des_vecs[j], scene.agg_words_vecs[j], agg_weights, alpha, similarity_threshold);
             candidate.push_back(std::tuple<int, int, double>(candidate_scenes[i], scene.imid_vecs[j], score));
+        }
+        // compute tolerate img
+        int front_candidate_scene_id = candidate_scene_id - 1;
+        int back_candidate_scene_id = candidate_scene_id + 1;
+        auto front_it = std::find(candidate_scenes.begin(), candidate_scenes.end(), front_candidate_scene_id);
+        auto back_it = std::find(candidate_scenes.begin(), candidate_scenes.end(), back_candidate_scene_id);
+        if (front_candidate_scene_id >= 0 && front_it == candidate_scenes.end()) {
+            Scene &front_scene = scenes[front_candidate_scene_id];
+            int start = front_scene.imid_vecs.size() - 10 > 0 ? front_scene.imid_vecs.size() - 10 : 0;
+            for (int j = start; j < front_scene.imid_vecs.size(); j++) {
+                double score = Hamming::compute_similarity(agg_des, agg_word_ids, front_scene.agg_des_vecs[j], front_scene.agg_words_vecs[j], alpha, similarity_threshold);
+                candidate.push_back(std::tuple<int, int, double>(candidate_scene_id, front_scene.imid_vecs[j], score));
+            }            
+        }
+        if (back_candidate_scene_id < histograms.size() && back_it == candidate_scenes.end()) {
+            Scene &back_scene = scenes[back_candidate_scene_id];
+            int end = back_scene.imid_vecs.size() > 10 ? 10 : back_scene.imid_vecs.size();
+            for (int j = 0; j < end; j++) {
+                double score = Hamming::compute_similarity(agg_des, agg_word_ids, back_scene.agg_des_vecs[j], back_scene.agg_words_vecs[j], alpha, similarity_threshold);
+                candidate.push_back(std::tuple<int, int, double>(candidate_scene_id, back_scene.imid_vecs[j], score));
+            }
         }
     }
     // Partially sort the candidate vector based on the score (third element in the tuple)
