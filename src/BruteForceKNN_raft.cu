@@ -1,21 +1,118 @@
-#include "bfknn_raft.hpp"
+#include "BruteForceKNN_raft.hpp"
+#include "GlobalDefine.hpp"
+#include <chrono>
 #include <raft/core/device_mdarray.hpp>
 #include <raft/core/host_mdarray.hpp>
 #include <raft/matrix/copy.cuh>
 #include <raft/core/resource/cuda_stream.hpp>
 #include <raft/neighbors/brute_force.cuh>
 #include <memory>
-void codebook_to_device(
+__global__ void updateRowsKernel(
+    float* codebook,        // 完整的 codebook (65536x128)
+    const float* new_data,  // 新的向量數據
+    const uint32_t* indices,// 要更新的索引
+    int num_rows,          // codebook 的總行數 (65536)
+    int num_updates,       // 要更新的行數
+    int dims              // 向量維度 (128)
+) {
+    // 計算當前線程要處理的更新索引和維度
+    int update_idx = blockIdx.x;  // 處理哪一個更新
+    int dim_idx = threadIdx.x;    // 處理向量的哪一個維度
+    
+    // 確保線程索引在有效範圍內
+    if (update_idx < num_updates && dim_idx < dims) {
+        // 獲取要更新的 codebook 行索引
+        uint32_t codebook_row = indices[update_idx];
+        
+        // 確保索引有效
+        if (codebook_row < num_rows) {
+            // 更新數據
+            // codebook[codebook_row * dims + dim_idx] = new_data[update_idx * dims + dim_idx];
+            atomicExch(
+                &codebook[codebook_row * dims + dim_idx],
+                new_data[update_idx * dims + dim_idx]
+            );
+        }
+    }
+}
+
+void updateCodebookRows(
+    raft::device_resources& dev_resources,
+    float* new_vectors,          
+    const uint32_t* update_indices,  
+    int num_updates,            
+    int dims,                   
+    MemoryPreallocation& memory // 包含 codebook_device (65536x128)
+) {
+    // 1. 創建並複製新向量到 device
+    auto new_vectors_device = raft::make_device_matrix<float, uint32_t>(
+        dev_resources, num_updates, dims
+    );
+    
+    // 創建臨時 host matrix 並複製數據
+    auto new_vectors_host = raft::make_host_matrix<float, uint32_t>(
+        dev_resources, num_updates, dims
+    );
+    std::memcpy(
+        new_vectors_host.data_handle(),
+        new_vectors,
+        num_updates * dims * sizeof(float)
+    );
+    
+    // 複製到 device
+    raft::copy(dev_resources, new_vectors_device.view(), new_vectors_host.view());
+
+    // 2. 創建並複製索引到 device
+    auto indices_device = raft::make_device_vector<uint32_t, uint32_t>(
+        dev_resources, num_updates
+    );
+    
+    // 創建臨時 host vector 並複製索引
+    auto indices_host = raft::make_host_vector<uint32_t, uint32_t>(
+        dev_resources, num_updates
+    );
+    for (int i = 0; i < num_updates; i++) {
+        indices_host.data_handle()[i] = static_cast<uint32_t>(update_indices[i]);
+    }
+    
+    // 複製到 device
+    raft::copy(dev_resources, indices_device.view(), indices_host.view());
+
+    // 3. 配置並啟動 CUDA kernel
+    int total_rows = memory.codebook_device.extent(0);  // 65536
+    
+    // 配置線程塊和網格
+    dim3 block(128);  // 每個線程處理一個維度
+    dim3 grid(num_updates);  // 每個塊處理一個更新
+    
+    // 獲取 CUDA stream
+    auto stream = raft::resource::get_cuda_stream(dev_resources);
+    
+    // 啟動 kernel
+    updateRowsKernel<<<grid, block, 0, stream>>>(
+        memory.codebook_device.data_handle(),
+        new_vectors_device.data_handle(),
+        indices_device.data_handle(),
+        total_rows,
+        num_updates,
+        dims
+    );
+    
+    // 同步確保更新完成
+    cudaStreamSynchronize(stream);
+}
+void codebookToDevice(
 	raft::device_resources& dev_resources, 
 	float* codebook, 
 	int numVectors, 
 	int dims, 
 	MemoryPreallocation& memory) 
 {
-	std::memcpy(memory.codebook_host.data_handle(), codebook, numVectors * dims * sizeof(float));
-	raft::copy(dev_resources, memory.codebook_device.view(), memory.codebook_host.view());
+	raft::host_matrix<float, uint32_t> codebook_host = raft::make_host_matrix<float, uint32_t>(dev_resources, numVectors, dims);
+	std::memcpy(codebook_host.data_handle(), codebook, numVectors * dims * sizeof(float));
+	raft::copy(dev_resources, memory.codebook_device.view(), codebook_host.view());
 }
-void queries_to_device(
+void queriesToDevice(
 	raft::device_resources& dev_resources, 
 	float* queries, 
 	int numQueries, 
@@ -25,7 +122,7 @@ void queries_to_device(
 	std::memcpy(memory.queries_host.data_handle(), queries, numQueries * dims * sizeof(float));
 	raft::copy(dev_resources, memory.queries_device.view(), memory.queries_host.view());
 }
-void bfknn(raft::device_resources& dev_resources, Args& args, MemoryPreallocation& memory)
+void bruteForceKNN(raft::device_resources& dev_resources, Args& args, MemoryPreallocation& memory)
 {
 	// auto codebook_host = raft::make_host_matrix<float>(dev_resources, args.numVectors, args.dims);
 	// auto queries_host = raft::make_host_matrix<float>(dev_resources, args.numQueries, args.dims);
@@ -240,7 +337,7 @@ void bfknn(raft::device_resources& dev_resources, Args& args, MemoryPreallocatio
 
 // 	// Perform kNN search using RAFT
 //     auto outter_start = std::chrono::high_resolution_clock::now();
-//     bfknn(dev_resources, args, memory);
+//     bruteForceKNN(dev_resources, args, memory);
 //     auto outter_end = std::chrono::high_resolution_clock::now();
 //     std::cout << "Outer time taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(outter_end - outter_start).count() << " ms" << std::endl;
 

@@ -5,7 +5,7 @@ void MinHeapWithTracking::push(const std::pair<int, int>& item)
     heap.push_back(item);
     int index = heap.size() - 1;
     id_to_index[item.first] = index;
-    sift_up(index);
+    siftUp(index);
 }
 
 std::pair<int, int> MinHeapWithTracking::pop() 
@@ -38,12 +38,12 @@ std::pair<int, int> MinHeapWithTracking::peek() const
     return heap[0];
 }
 
-bool MinHeapWithTracking::is_empty() const 
+bool MinHeapWithTracking::isEmpty() const 
 {
     return heap.empty();
 }
 
-void MinHeapWithTracking::increment_count(int id, int add_count) 
+void MinHeapWithTracking::incrementCount(int id, int add_count) 
 {
     auto it = id_to_index.find(id);
     if (it != id_to_index.end()) {
@@ -52,7 +52,7 @@ void MinHeapWithTracking::increment_count(int id, int add_count)
         int new_count = old_count + add_count;
         heap[index].second = new_count;
         if (new_count < old_count) {
-            sift_up(index);
+            siftUp(index);
         } else {
             heapify(index);
         }
@@ -81,7 +81,7 @@ void MinHeapWithTracking::heapify(int index)
     }
 }
 
-void MinHeapWithTracking::sift_up(int index) 
+void MinHeapWithTracking::siftUp(int index) 
 {
     int current = index;
     while (current > 0) {

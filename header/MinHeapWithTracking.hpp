@@ -14,9 +14,9 @@ public:
 
     std::pair<int, int> peek() const;
 
-    bool is_empty() const;
+    bool isEmpty() const;
 
-    void increment_count(int id, int add_count);
+    void incrementCount(int id, int add_count);
 
     friend std::ostream& operator<<(std::ostream& os, const MinHeapWithTracking& heap);
 
@@ -26,7 +26,7 @@ private:
 
     void heapify(int index);
 
-    void sift_up(int index);
+    void siftUp(int index);
 
     void swap(int i, int j);
 };

@@ -34,11 +34,9 @@ find_package(yaml-cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS program_options filesystem)
 include_directories(${Boost_INCLUDE_DIRS})
 # set OpenMP
-find_package(OpenMP REQUIRED)
+# find_package(OpenMP REQUIRED)
 # Find OpenCV package
 find_package(OpenCV REQUIRED)
-
-
 # ------------- configure raft -----------------#
 
 rapids_cpm_init()
@@ -47,21 +45,29 @@ include(cmake/thirdparty/get_raft.cmake)
 # -------------- compile tasks ----------------- #
 # Include all header files
 include_directories(header)
+# include_directories(original_version/header)
 # List all source files
-set(SOURCES
+# set(Original
+#     src/BruteForceKNN_raft.cu
+#     src/MinHeapWithTracking.cpp
+#     src/Hamming.cpp
+#     src/Matching.cpp
+#     src/svm.cpp
+#     src/calculate.cpp
+#     src/CodebookWithSpare.cpp
+#     original_version/src/InvertedFile.cpp
+#     original_version/src/LCDEngineOriginal.cpp
+# )
+set(MainSrcs
     src/svm.cpp
     src/calculate.cpp
-    src/SVMMatcher.cpp
-    src/bfknn_raft.cu
+    src/Matching.cpp
+    src/BruteForceKNN_raft.cu
     src/MinHeapWithTracking.cpp
-    # src/Aggregator.cpp
     src/Hamming.cpp
     src/Searcher.cpp
     src/CodebookWithSpare.cpp
-    # src/LCDEngine_no_binary.cpp
     src/LCDEngine.cpp
-    # src/SCDEngine.cpp
 )
-add_executable(LCDEngine ${SOURCES})
-target_link_libraries(LCDEngine PRIVATE yaml-cpp)
-target_link_libraries(LCDEngine PUBLIC raft::raft raft::compiled Eigen3::Eigen OpenMP::OpenMP_CXX ${Boost_LIBRARIES} ${OpenCV_LIBS})
+add_executable(LCDEngine ${MainSrcs})
+target_link_libraries(LCDEngine PUBLIC yaml-cpp raft::raft raft::compiled Eigen3::Eigen ${Boost_LIBRARIES} ${OpenCV_LIBS})

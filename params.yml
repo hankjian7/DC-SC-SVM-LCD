@@ -1,6 +1,6 @@
-lcd:
-  scene_change_checktimes: 1 # Check times for scene change
 codebook:
+  codebook_cache_path: /root/LCD/LCD_data/codebook_64k.txt
+  codebook_info_path: /root/LCD/LCD_data/codebook_info_64k.txt
   codebook_size: 65536 # Size of the codebook
   feature_num: 512 # Number of local features
   feature_dim: 128 # Dimension of the local features
@@ -9,7 +9,6 @@ similarity:
   alpha: 3.0 # Weight of the spatial similarity
   similarity_threshold: 0.0 # Threshold for the similarity matrix
   scene_change_threshold: 0.0 # Threshold for the scene change
-  topk_scene: 2 # Threshold for the scene change
 svm:
-  angle_model_path: "/root/LCD/LCDEngine/CC_COOSAC/svm/snm_test/train_angle_0729.model"
-  length_model_path: "/root/LCD/LCDEngine/CC_COOSAC/svm/snm_test/train_len_0729.model"
+  angle_model_path: "/root/LCD/LCD_data/svm_model/train_angle_gt.model"
+  length_model_path: "/root/LCD/LCD_data/svm_model/train_len_gt.model"

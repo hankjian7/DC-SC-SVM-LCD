@@ -1,5 +1,5 @@
 #include "CodebookWithSpare.hpp"
-#include "bfknn_raft.hpp"
+#include "BruteForceKNN_raft.hpp"
 #include "GlobalDefine.hpp"
 #include "MinHeapWithTracking.hpp"
 #include <raft/core/device_resources.hpp>
@@ -14,8 +14,89 @@
 #include <boost/bimap.hpp>
 #include <chrono>
 #include <omp.h>
+class mycomp 
+{
+public:
+    bool operator()(const std::pair<float, int>& a, const std::pair<float, int>& b) {
+        return a.first < b.first;
+    }
+};
+void bruteForceKNN_single_query_eigen(
+    const MatrixXfR &centroids,
+    const MatrixXfR &query,  
+    int multiple_assignment,
+    MatrixXiR& indices,      
+    MatrixXfR& distances)    
+{
+    const int num_centroids = centroids.rows();
+    const int num_threads = omp_get_max_threads();
+    const int block_size = (num_centroids + num_threads - 1) / num_threads;
+    
+    indices.resize(multiple_assignment, 1);
+    distances.resize(multiple_assignment, 1);
+    
+    std::vector<std::vector<std::pair<float, int>>> local_results(num_threads);
+    
+    #pragma omp parallel
+    {
+        const int thread_id = omp_get_thread_num();
+        const int start_idx = thread_id * block_size;
+        const int end_idx = std::min(start_idx + block_size, num_centroids);
+        
+        std::vector<std::pair<float, int>> local_dists;
+        local_dists.reserve(end_idx - start_idx);
+        
+        // 使用 Eigen 計算距離
+        for (int v = start_idx; v < end_idx; ++v) {
+            float dist = (centroids.row(v) - query.transpose()).squaredNorm();
+            local_dists.emplace_back(dist, v);
+        }
+        
+        std::partial_sort(local_dists.begin(),
+                         local_dists.begin() + std::min(multiple_assignment, (int)local_dists.size()),
+                         local_dists.end(),
+                         mycomp());
+                         
+        local_results[thread_id] = std::move(local_dists);
+    }
+    
+    std::vector<std::pair<float, int>> final_dists;
+    final_dists.reserve(multiple_assignment * num_threads);
+    
+    for (const auto& local_result : local_results) {
+        final_dists.insert(final_dists.end(),
+                          local_result.begin(),
+                          local_result.begin() + std::min(multiple_assignment, (int)local_result.size()));
+    }
+    
+    std::partial_sort(final_dists.begin(),
+                     final_dists.begin() + multiple_assignment,
+                     final_dists.end(),
+                     mycomp());
 
-int Codebook::load_codebook (const std::string& codebook_path) 
+    for (int i = 0; i < multiple_assignment; ++i) {
+        distances(i, 0) = std::sqrt(final_dists[i].first);  // 如果需要真實的歐氏距離
+        indices(i, 0) = final_dists[i].second;
+    }
+}
+Codebook::Codebook (int codebook_size, int numQueries, int dims, int multiple_assignment):
+    dev_resources(), // Initialize dev_resources
+    memory(dev_resources, codebook_size, numQueries, dims), // Initialize memory with dev_resources, numVectors, numQueries, and dims;
+    main_size(codebook_size),
+    multiple_assignment(multiple_assignment),
+    spare_size(0),
+    spare_capacity(1024),
+    //spare_cluster_maxRadius(197.0619f),
+    spare_cluster_maxRadius(572.563f),
+    total_swap_times(0),
+    max_spare_time(0)
+{        
+    spare_cluster_radius = std::vector(spare_capacity, 572.563f);
+    spare_centroids.resize(1024, dims);
+    spare_centroids.setConstant(std::numeric_limits<float>::max());
+    id_in_spare = std::vector<bool>(codebook_size, false);
+}
+int Codebook::loadCodebook (const std::string& codebook_path) 
 {
     std::ifstream file(codebook_path);
 
@@ -54,14 +135,14 @@ int Codebook::load_codebook (const std::string& codebook_path)
             centroids(i, j) = values[i * cols + j];
         }
     }
-    codebook_to_device(dev_resources, centroids.data(), centroids.rows(), centroids.cols(), memory);
+    codebookToDevice(dev_resources, centroids.data(), centroids.rows(), centroids.cols(), memory);
 
     // mean_pyramid(centroids, codebook_pyramid);
     // sort_base_on_top_pyramid(centroids, codebook_pyramid);
     return 0;
 }
 
-void Codebook::load_codebook_info(const std::string& codebook_info_path) 
+void Codebook::loadCodebookInfo(const std::string& codebook_info_path) 
 {
     for (int i = 0; i < main_size; ++i) {
         bi_index_id.insert({i, i});
@@ -96,22 +177,23 @@ void Codebook::load_codebook_info(const std::string& codebook_info_path)
     }
     //cluster_radius.assign(cluster_radius.size(), spare_cluster_maxRadius);
 }
-inline void Codebook::update_main_frequency(int index) 
+inline void Codebook::updateMainFrequency(int index) 
 {
-    min_heap.increment_count(index, 1);
+    min_heap.incrementCount(index, 1);
 }
 
-inline void Codebook::update_spare_frequency(int index) 
+inline void Codebook::updateSpareFrequency(int index) 
 {
-    max_heap.increment_count(index, -1);
+    max_heap.incrementCount(index, -1);
 }
 
-void Codebook::check_and_swap() 
+void Codebook::checkAndSwap() 
 {
     std::vector<std::pair<int, int>> push_to_min_heap;
     std::vector<std::pair<int, int>> push_to_max_heap;
     bool swap_flag = false;
-    while (!min_heap.is_empty() && !max_heap.is_empty()) {
+    std::vector<u_int32_t> changed_primary_indices;
+    while (!min_heap.isEmpty() && !max_heap.isEmpty()) {
         std::pair<int, int> min_in_main = min_heap.peek();
         std::pair<int, int> max_in_spare = max_heap.peek();
         int min_index = min_in_main.first;
@@ -125,6 +207,9 @@ void Codebook::check_and_swap()
             temp = centroids.row(min_index);
             centroids.row(min_index) = spare_centroids.row(max_index);
             spare_centroids.row(max_index) = temp;
+            
+            changed_primary_indices.push_back(static_cast<u_int32_t>(min_index));
+
             // Swap the cluster radius
             std::swap(cluster_radius[min_index], spare_cluster_radius[max_index]);
             // Swap the id2index
@@ -159,115 +244,60 @@ void Codebook::check_and_swap()
         max_heap.push(item);
     }
     if (swap_flag) {
-        codebook_to_device(dev_resources, centroids.data(), centroids.rows(), centroids.cols(), memory);
+        MatrixXfR changed_primary_centroids(changed_primary_indices.size(), centroids.cols());
+        for (int i = 0; i < changed_primary_indices.size(); ++i) {
+            changed_primary_centroids.row(i) = centroids.row(changed_primary_indices[i]);
+        }
+        updateCodebookRows(dev_resources, changed_primary_centroids.data(), changed_primary_indices.data(), changed_primary_indices.size(), changed_primary_centroids.cols(), memory);
+        // codebookToDevice(dev_resources, centroids.data(), centroids.rows(), centroids.cols(), memory);
     }
 }
 
-int Codebook::quantize_and_update(
+int Codebook::quantizeAndUpdate(
     const MatrixXfR& des, 
     MatrixXiR& indices) 
 {
     indices.resize(des.rows(), multiple_assignment);
     MatrixXfR distances(des.rows(), multiple_assignment);
     // Assuming Args is a structure containing necessary arguments for traditional_knn
-    Args bfknn_arg;
-    bfknn_arg.dims = des.cols();
-    bfknn_arg.k = multiple_assignment;
-    bfknn_arg.numQueries = des.rows();
-    bfknn_arg.numVectors = centroids.rows();
-    bfknn_arg.queries = (float*)des.data();
-    bfknn_arg.codebook = centroids.data();
-    bfknn_arg.outIndices = indices.data();
-    bfknn_arg.outDistances = distances.data();
-    queries_to_device(dev_resources, (float*)des.data(), bfknn_arg.numQueries, bfknn_arg.dims, memory);
-    bfknn(dev_resources, bfknn_arg, memory);
+    Args bruteForceKNN_arg;
+    bruteForceKNN_arg.dims = des.cols();
+    bruteForceKNN_arg.k = multiple_assignment;
+    bruteForceKNN_arg.numQueries = des.rows();
+    bruteForceKNN_arg.numVectors = centroids.rows();
+    bruteForceKNN_arg.queries = (float*)des.data();
+    bruteForceKNN_arg.codebook = centroids.data();
+    bruteForceKNN_arg.outIndices = indices.data();
+    bruteForceKNN_arg.outDistances = distances.data();
+    queriesToDevice(dev_resources, (float*)des.data(), bruteForceKNN_arg.numQueries, bruteForceKNN_arg.dims, memory);
+    bruteForceKNN(dev_resources, bruteForceKNN_arg, memory);
     // Process the results
     std::vector<int> to_spare_indices;
     for (int i = 0; i < des.rows(); ++i) {
         if (distances(i, 0) < cluster_radius[indices(i, 0)]) {
-            update_main_frequency(indices(i, 0));
+            updateMainFrequency(indices(i, 0));
         } else {
             to_spare_indices.push_back(i);
-            indices(i, 0) = -1;
+            // indices(i, 0) = -1;
         }
     }
-    // Create spare_des and update centroid_indices
-    // spare_des.resize(to_spare_indices.size(), des.cols());
-    // for (int i = 0; i < to_spare_indices.size(); ++i) {
-    //     spare_des.row(i) = des.row(to_spare_indices[i]);
-    //     indices(to_spare_indices[i], 0) = -1;
-    // }
-    // preprocess spare des 
-    //spare_indices.resize(spare_des.rows(), 1);
-    // MatrixXiR in_spare_indices(spare_des.rows(), 2);
-    // MatrixXfR in_spare_distances(spare_des.rows(), 2);
-    // Args in_spare_arg;
-    // in_spare_arg.dims = spare_des.cols();
-    // in_spare_arg.k = 2;
-    // in_spare_arg.numQueries = spare_des.rows();
-    // in_spare_arg.numVectors = spare_des.rows();
-    // in_spare_arg.queries = spare_des.data();
-    // in_spare_arg.codebook = spare_des.data();
-    // traditional_knn(in_spare_arg, in_spare_indices, in_spare_distances);
-    // std::cout << "spare_cluster_maxRadius" << spare_cluster_maxRadius << std::endl;
-    // std::cout << "in_spare_indices: " << in_spare_indices << std::endl;
-    // std::cout << "in_spare_distances: " << in_spare_distances << std::endl;
-    // std::vector<std::vector<int>> cluster_result(spare_des.rows());
-    // std::vector<bool> visited(spare_des.rows(), false);
-    // int visited_count = 0, cluster_count = 0, index = 0;
-    // while (visited_count < spare_des.rows()) {
-    //     if (!visited[index]) {
-    //         if (in_spare_distances(index, 1) < spare_cluster_maxRadius) {
-    //             cluster_result[cluster_count].push_back(index);
-    //             visited[index] = true;
-    //             visited_count++;
-    //             index = in_spare_indices(index, 1);
-    //         }
-    //         else {
-    //             cluster_result[cluster_count].push_back(index);
-    //             visited[index] = true;
-    //             visited_count++;
-    //             cluster_count ++;
-    //             // find next unvisited
-    //             index = 0;
-    //             while (visited[index]) {
-    //                 index++;
-    //             }
-    //         }
-    //     }
-    //     else {
-    //         // find next unvisited
-    //         index = 0;
-    //         while (visited[index]) {
-    //             index++;
-    //         }
-    //     }
-    // }
-    // std::cout << "cluster_result: " << std::endl;
-    // for (int i = 0; i < cluster_result.size(); ++i) {
-    //     std::cout << "cluster_result[" << i << "]: ";
-    //     for (int j = 0; j < cluster_result[i].size(); ++j) {
-    //         std::cout << cluster_result[i][j] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
     for (int i = 0; i < to_spare_indices.size(); ++i) {
         if (spare_size == 0) {
-            add_spare_centroid(des.row(to_spare_indices[i]));
+            addSpareCentroid(des.row(to_spare_indices[i]));
             //spare_indices(i, 0) = 0;
         }
         else {
             // Perform k-NN search on spare centroids
             MatrixXiR spare_indices_tmp(1, multiple_assignment);
             MatrixXfR spare_distances_tmp(1, multiple_assignment);
-            bfknn_cpu(spare_centroids, des.row(to_spare_indices[i]), multiple_assignment, spare_indices_tmp, spare_distances_tmp);
+            bruteForceKNN_cpu(spare_centroids, des.row(to_spare_indices[i]), multiple_assignment, spare_indices_tmp, spare_distances_tmp);
             int spare_centroid_index = spare_indices_tmp(0, 0);
             float spare_distance = spare_distances_tmp(0, 0);
             if (spare_distance < spare_cluster_radius[spare_centroid_index]) {
-                update_spare_frequency(spare_centroid_index);
+                updateSpareFrequency(spare_centroid_index);
                 //spare_indices(i, 0) = spare_centroid_index;
             } else {
-                add_spare_centroid(des.row(to_spare_indices[i]));
+                addSpareCentroid(des.row(to_spare_indices[i]));
                 //spare_indices(i, 0) = spare_size - 1;
             }
         }
@@ -291,12 +321,12 @@ int Codebook::quantize(
     args.outIndices = indices.data();
     args.outDistances = distances.data();
 
-    // Perform raft bfknn
-    queries_to_device(dev_resources, (float*)des.data(), args.numQueries, args.dims, memory);
-    bfknn(dev_resources, args, memory);
+    // Perform raft bruteForceKNN
+    queriesToDevice(dev_resources, (float*)des.data(), args.numQueries, args.dims, memory);
+    bruteForceKNN(dev_resources, args, memory);
     return 0;
 }
-void Codebook::add_spare_centroid(const MatrixXfR& des) 
+void Codebook::addSpareCentroid(const MatrixXfR& des) 
 {
     // Check if we need to expand spare_centroids
     if (spare_size >= spare_capacity) {
@@ -321,11 +351,15 @@ void Codebook::add_spare_centroid(const MatrixXfR& des)
     id_in_spare.push_back(true);
     spare_size += 1;
 }
-int Codebook::get_capacity() 
+int Codebook::getSize() 
+{
+    return main_size + spare_size;
+}
+int Codebook::getCapacity() 
 {
     return main_size + spare_capacity;
 }
-void Codebook::get_id_by_index(std::vector<int>& indices) 
+void Codebook::getIdByIndex(std::vector<int>& indices) 
 {
     for (int i = 0; i < indices.size(); ++i) {
         auto it = bi_index_id.left.find(indices[i]);
@@ -336,7 +370,7 @@ void Codebook::get_id_by_index(std::vector<int>& indices)
         }
     }
 }
-void Codebook::get_id_by_index(MatrixXiR &indices) 
+void Codebook::getIdByIndex(MatrixXiR &indices) 
 {
     for (int i = 0; i < indices.rows(); ++i) {
         for (int j = 0; j < indices.cols(); ++j) {
@@ -349,7 +383,7 @@ void Codebook::get_id_by_index(MatrixXiR &indices)
         }
     }
 }
-void Codebook::get_spare_id_by_index(std::vector<int>& indices) 
+void Codebook::getSpareIdByIndex(std::vector<int>& indices) 
 {
     for (int i = 0; i < indices.size(); ++i) {
         auto it = bi_spare_index_id.left.find(indices[i]);
@@ -360,16 +394,15 @@ void Codebook::get_spare_id_by_index(std::vector<int>& indices)
         }
     }
 }
-
-class mycomp 
-{
-public:
-    bool operator()(const std::pair<float, int>& a, const std::pair<float, int>& b) {
-        return a.first < b.first;
-    }
-};
+// class mycomp 
+// {
+// public:
+//     bool operator()(const std::pair<float, int>& a, const std::pair<float, int>& b) {
+//         return a.first < b.first;
+//     }
+// };
 // Perform kNN on CPU search
-void Codebook::bfknn_cpu(
+void Codebook::bruteForceKNN_cpu(
     const MatrixXfR &centorids, 
     const MatrixXfR &queries, 
     int multiple_assignment, 
