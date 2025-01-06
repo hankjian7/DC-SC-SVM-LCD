@@ -1,6 +1,6 @@
 codebook:
-  codebook_cache_path: /root/LCD/LCD_data/codebook_64k.txt
-  codebook_info_path: /root/LCD/LCD_data/codebook_info_64k.txt
+  codebook_cache_path: /root/LCD/LCD_data/codebook.bin
+  codebook_info_path: /root/LCD/LCD_data/codebook_info.txt
   codebook_size: 65536 # Size of the codebook
   feature_num: 512 # Number of local features
   feature_dim: 128 # Dimension of the local features

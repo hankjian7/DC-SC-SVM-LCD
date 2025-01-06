@@ -96,50 +96,44 @@ Codebook::Codebook (int codebook_size, int numQueries, int dims, int multiple_as
     spare_centroids.setConstant(std::numeric_limits<float>::max());
     id_in_spare = std::vector<bool>(codebook_size, false);
 }
-int Codebook::loadCodebook (const std::string& codebook_path) 
-{
-    std::ifstream file(codebook_path);
-
+void Codebook::loadCodebook (const std::string& codebook_path) {
+    std::ifstream file(codebook_path, std::ios::binary);
+    
     if (!file.is_open()) {
-        std::cerr << "Error opening file" << std::endl;
-        return -1;
+        std::cerr << "Error opening file for reading: " << codebook_path << std::endl;
+        throw std::runtime_error("Error reading codebook");
     }
 
-    std::vector<double> values;
-    int rows = 0;
-    int cols = 0;
-    std::string line;
-    
-    // Read the file line by line
-    while (std::getline(file, line)) {
-        std::stringstream ss(line);
-        double value;
-        int temp_cols = 0;
-        while (ss >> value) {
-            values.push_back(value);
-            temp_cols++;
-        }
-        if (cols == 0) {
-            cols = temp_cols;
-        }
-        rows++;
+    // Read dimensions
+    int rows, cols;
+    file.read(reinterpret_cast<char*>(&rows), sizeof(rows));
+    file.read(reinterpret_cast<char*>(&cols), sizeof(cols));
+
+    // Verify dimensions if needed
+    if (rows != main_size) {
+        std::cerr << "Mismatched number of rows. Expected: " << main_size 
+                << ", Got: " << rows << std::endl;
+        file.close();
+        throw std::runtime_error("Error loading codebook");
+    }
+
+    // Resize the matrix
+    centroids.resize(rows, cols);
+
+    // Read the matrix data directly into the Eigen matrix
+    file.read(reinterpret_cast<char*>(centroids.data()), rows * cols * sizeof(float));
+
+    // Check if read was successful
+    if (file.fail()) {
+        std::cerr << "Error reading binary data" << std::endl;
+        file.close();
+        throw std::runtime_error("Error loading codebook");
     }
 
     file.close();
-    assert(rows == main_size);
 
-    // Map the values to an Eigen matrix
-    centroids.resize(rows, cols);
-    for (int i = 0; i < rows; ++i) {
-        for (int j = 0; j < cols; ++j) {
-            centroids(i, j) = values[i * cols + j];
-        }
-    }
+    // Transfer to device if needed
     codebookToDevice(dev_resources, centroids.data(), centroids.rows(), centroids.cols(), memory);
-
-    // mean_pyramid(centroids, codebook_pyramid);
-    // sort_base_on_top_pyramid(centroids, codebook_pyramid);
-    return 0;
 }
 
 void Codebook::loadCodebookInfo(const std::string& codebook_info_path) 
@@ -155,7 +149,7 @@ void Codebook::loadCodebookInfo(const std::string& codebook_info_path)
 
     std::ifstream file(codebook_info_path);
     if (!file.is_open()) {
-        throw std::runtime_error("Could not open file");
+        throw std::runtime_error("Error loading codebook info");
     }
 
     std::string line;

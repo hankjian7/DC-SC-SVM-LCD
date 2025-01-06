@@ -14,7 +14,7 @@ class Codebook {
 public:
     Codebook() = delete;
     Codebook(int codebook_size, int numQueries, int dims, int multiple_assignment);
-    int loadCodebook(const std::string &codebook_path);
+    void loadCodebook(const std::string &codebook_path);
     void loadCodebookInfo(const std::string &codebook_info_path);
     void checkAndSwap();
     int quantizeAndUpdate(
