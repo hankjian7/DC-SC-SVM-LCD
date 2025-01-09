@@ -11,8 +11,6 @@ Loop closure detection (LCD) is an important issue in simultaneous localization 
 - **libyaml-cpp:** 0.7.0
 - **Boost:** 1.74
 
-## Environment
-
 ### 1. CUDA
 This project utilizes the RAFT library for codeword mapping and requires CUDA support. We **highly recommend** using Docker to set up a CUDA environment. You can download a Docker image matching your CUDA version here:
 
@@ -67,12 +65,35 @@ We extract super features from all dataset and use their codebook as our primary
 
 [Learning Super-Features for Image Retrieval](https://github.com/naver/FIRe?tab=readme-ov-file)
 
+To save super features in binary format, ensure the data type is set to float32 and use the following Python script. The ```LCDEngine``` can then load the binary files using the ```loadDescriptors``` function. For example, the super feature of ```0000.jpg``` will be saved in the descriptor folder (user-specified) as ```0000.jpg.bin```:
+```python
+import os
+import numpy as np
+
+# Ensure super feature type is float32
+des = des.astype(np.float32)
+
+des_output_path = os.path.join(output_path, f"{image_name}.bin")
+with open(des_output_path, 'wb') as f:
+    # Write descriptor dimensions
+    header = np.array(descriptor.shape, dtype=np.int32)
+    header.tofile(f)
+    # Write descriptor data
+    des.tofile(f)
+``` 
+
 Additionally, we provide the **SVM model**, along with the **codebook** and **test super features** from the City Centre dataset. You can access them here:
 
 [DC-SC-SVM-LCD Data](https://drive.google.com/drive/folders/1KjUwPw_jBxBGoRN3eaXtgFEekJWRxH5J?usp=drive_link)
 
 ## Run Loop Closure Detection
+
+To execute the LCD engine, use the following command:
 ```bash
-$ bash ./run_LCD.sh
+$ ./build/LCDEngine --parameters /root/LCD/LCDEngine/params.yml\
+    --img_list /root/LCD/LCD_data/CC/left_image_list.txt\
+    --des-path /root/LCD/LCD_data/des/CC\
+    -o /root/LCD/LCD_data/experimental_result/CC/result.txt\
+    --topk 2
 ```
 
