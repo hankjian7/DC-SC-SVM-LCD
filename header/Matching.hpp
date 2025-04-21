@@ -39,9 +39,19 @@ public:
     double matchingDraw(
         const std::string &img1_path, 
         const std::string &img2_path,
-        std::chrono::duration<double, std::milli> &surf_duration,
-        std::chrono::duration<double, std::milli> &svm_duration,
-        std::string &img_save_path);
+        const std::string &img_save_path);
+    void draw_correspondence_vertical(
+        const std::string &img1_path, 
+        const std::string &img2_path, 
+        const std::vector<cv::Point2f> &ori, 
+        const std::vector<cv::Point2f> &tar,
+        const std::string &img_save_path);
+    void draw_correspondence_horizontal(
+        const std::string &img1_path, 
+        const std::string &img2_path, 
+        const std::vector<cv::Point2f> &ori, 
+        const std::vector<cv::Point2f> &tar,
+        const std::string &img_save_path);
 private:
     void getCorrespondeces(
         const cv::Mat& img1, 

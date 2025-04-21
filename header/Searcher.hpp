@@ -32,10 +32,10 @@ public:
         float alpha,
         float similarity_threshold,
         float scene_change_threshold,
-        int topk_scene): 
+        int topk_scene) : 
         alpha(alpha), similarity_threshold(similarity_threshold),
         scene_change_threshold(scene_change_threshold), topk_scene(topk_scene),
-        n_images(0), pre_scene_id(0){}
+        n_images(0), pre_scene_id(0), tolerate(13){}
     bool sceneChangeDetection(
         const MatrixXuiR &agg_des1, 
         const std::vector<int> &agg_words1,
@@ -67,4 +67,5 @@ public:
     float similarity_threshold;
     float scene_change_threshold;
     int pre_scene_id;
+    int tolerate;
 };

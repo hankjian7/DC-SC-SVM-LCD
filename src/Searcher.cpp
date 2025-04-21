@@ -157,7 +157,7 @@ void Searcher::search(
             candidate.push_back(std::tuple<int, int, double>(candidate_scenes[i], scene.imid_vecs[j], score));
         }
         // compute tolerate img
-        int tolerate = 19;
+        // int tolerate = 19;
         int front_candidate_scene_id = candidate_scene_id - 1;
         int back_candidate_scene_id = candidate_scene_id + 1;
         auto front_it = std::find(candidate_scenes.begin(), candidate_scenes.end(), front_candidate_scene_id);
@@ -233,7 +233,7 @@ void Searcher::search_map(
         }
         //auto end = std::chrono::steady_clock::now();
         // compute tolerate img
-        int tolerate = 19;
+        // int tolerate = 19;
         int front_candidate_scene_id = candidate_scene_id - 1;
         int back_candidate_scene_id = candidate_scene_id + 1;
         auto front_it = std::find(candidate_scenes.begin(), candidate_scenes.end(), front_candidate_scene_id);

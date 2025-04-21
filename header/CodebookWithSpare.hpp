@@ -1,7 +1,7 @@
 #pragma once
 #include "BruteForceKNN_raft.hpp"
 #include "GlobalDefine.hpp"
-#include "MinHeapWithTracking.hpp"
+#include "MinHeapWithFlag.hpp"
 #include <raft/core/device_resources.hpp>
 #include <string>
 #include <vector>
@@ -44,23 +44,29 @@ public:
     int main_size;
     MatrixXfR centroids;
     std::vector<float> cluster_radius;
+
     //spare centroid
     MatrixXfR spare_centroids;
     float spare_cluster_maxRadius;
     std::vector<float> spare_cluster_radius;
     int spare_size;
     int spare_capacity;
+
     //frequency management
-    MinHeapWithTracking min_heap;
-    MinHeapWithTracking max_heap;
+    MinHeapWithFlag min_heap;
+    MinHeapWithFlag max_heap;
+    
     //index<->id mapping
     boost::bimap<int, int> bi_index_id;
     boost::bimap<int, int> bi_spare_index_id;
-    // id in spare
+    
+    //id in spare
     std::vector<bool> id_in_spare;
+    
     //gpu resources    
     raft::device_resources dev_resources;
     MemoryPreallocation memory;
+    
     //tmp usage
     int total_swap_times;
     DurationMs max_spare_time;

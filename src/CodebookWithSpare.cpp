@@ -1,7 +1,7 @@
 #include "CodebookWithSpare.hpp"
 #include "BruteForceKNN_raft.hpp"
 #include "GlobalDefine.hpp"
-#include "MinHeapWithTracking.hpp"
+#include "MinHeapWithFlag.hpp"
 #include <raft/core/device_resources.hpp>
 #include <iostream>
 #include <string>
@@ -143,31 +143,36 @@ void Codebook::loadCodebookInfo(const std::string& codebook_info_path)
     }
     bi_index_id.insert({-1, -1});
     bi_spare_index_id.insert({-1, -1});
-    for (int i = 0; i < main_size; ++i) {
-        min_heap.push(std::make_pair(i, 0));
-    }
 
     std::ifstream file(codebook_info_path);
     if (!file.is_open()) {
         throw std::runtime_error("Error loading codebook info");
     }
 
+    std::vector<int> trained_weights;
     std::string line;
 
     // Skip the header
     std::getline(file, line);
-
+    
     // Read the data
     while (std::getline(file, line)) {
         std::stringstream ss(line);
         std::string cell;
         std::getline(ss, cell, ',');  // Read first cell (we ignore it)
         std::getline(ss, cell, ',');  // Read the Size cell
+        int size = std::stoi(cell);
+        trained_weights.push_back(size);
         std::getline(ss, cell, ',');  // Read the MinDistance cell
         std::getline(ss, cell, ',');  // Read the MaxDistance cell
         float radius = std::stof(cell);
         cluster_radius.push_back(radius);
         spare_cluster_maxRadius = std::max(spare_cluster_maxRadius, radius);
+    }
+
+    for (int i = 0; i < main_size; ++i) {
+        Item item(i, 0, 1, trained_weights[i]);
+        min_heap.push(item);
     }
     //cluster_radius.assign(cluster_radius.size(), spare_cluster_maxRadius);
 }
@@ -183,17 +188,18 @@ inline void Codebook::updateSpareFrequency(int index)
 
 void Codebook::checkAndSwap() 
 {
-    std::vector<std::pair<int, int>> push_to_min_heap;
-    std::vector<std::pair<int, int>> push_to_max_heap;
+    std::vector<Item> push_to_min_heap;
+    std::vector<Item> push_to_max_heap;
     bool swap_flag = false;
     std::vector<u_int32_t> changed_primary_indices;
     while (!min_heap.isEmpty() && !max_heap.isEmpty()) {
-        std::pair<int, int> min_in_main = min_heap.peek();
-        std::pair<int, int> max_in_spare = max_heap.peek();
-        int min_index = min_in_main.first;
-        int min_count = min_in_main.second;
-        int max_index = max_in_spare.first;
-        int max_count = -max_in_spare.second;
+        Item min_in_main = min_heap.peek();
+        Item max_in_spare = max_heap.peek();
+        int min_index = min_in_main.id;
+        int min_count = min_in_main.frequency;
+        int max_index = max_in_spare.id;
+        int max_count = -max_in_spare.frequency;
+
 
         if (min_count < max_count) {
             // Swap the centroids
@@ -221,9 +227,10 @@ void Codebook::checkAndSwap()
             }
             min_heap.pop();
             max_heap.pop();
-
-            push_to_min_heap.emplace_back(min_index, max_count);
-            push_to_max_heap.emplace_back(max_index, -min_count);
+            /*min_index 現在拿到了原本在 spare 的 (count = max_count) ⇒ 所以丟回 min_heap
+              max_index 現在拿到了原本在 main 的 (count = min_count) ⇒ 所以丟回 max_heap*/
+            push_to_min_heap.emplace_back(Item(min_index, max_count, !max_in_spare.flag, -max_in_spare.weight));
+            push_to_max_heap.emplace_back(Item(max_index, -min_count, !min_in_main.flag, -min_in_main.weight));
 
             total_swap_times++;
             swap_flag = true;
@@ -231,10 +238,10 @@ void Codebook::checkAndSwap()
             break;
     }
 
-    for (const auto& item : push_to_min_heap) {
+    for (auto& item : push_to_min_heap) {
         min_heap.push(item);
     }
-    for (const auto& item : push_to_max_heap) {
+    for (auto& item : push_to_max_heap) {
         max_heap.push(item);
     }
     if (swap_flag) {
@@ -340,7 +347,8 @@ void Codebook::addSpareCentroid(const MatrixXfR& des)
     spare_centroids.block(spare_size, 0, des.rows(), des.cols()) = des;
 
     // Expand spare counts and spare index2id
-    max_heap.push(std::make_pair(spare_size, 0));
+    Item item(spare_size, 0, 0, 0);
+    max_heap.push(item);
     bi_spare_index_id.insert({spare_size, main_size + spare_size});
     id_in_spare.push_back(true);
     spare_size += 1;

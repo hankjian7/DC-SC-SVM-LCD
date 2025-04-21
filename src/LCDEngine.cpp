@@ -230,7 +230,13 @@ int LCDEngine(
                 // Get the correspondences between the query and result images
                 std::vector<cv::Point2f> src_points, tgt_points;
                 surf_start = std::chrono::high_resolution_clock::now();
-                matcher.getCorrespondence(query_keypoints, query_descriptors, result_keypoints, result_descriptors, src_points, tgt_points);
+                matcher.getCorrespondence(
+                    query_keypoints, 
+                    query_descriptors, 
+                    result_keypoints, 
+                    result_descriptors, 
+                    src_points, 
+                    tgt_points);
                 surf_end = std::chrono::high_resolution_clock::now();
                 // Perform matching
                 auto svm_start = std::chrono::high_resolution_clock::now();
@@ -249,12 +255,10 @@ int LCDEngine(
             // Output the topk results
             for (int i = 0; i < topk_imid.size(); ++i) {
                 output << imid << ", " << topk_imid[i] << ", " << inlier_number[i] << endl;
-                // output << dbimgs_it << ", " << dbimgs[topk_imid[i]] << ", " << topk_scores[i] <<  endl;
             }
             if (topk > topk_imid.size()) {
                 for (int i = topk_imid.size(); i < topk; ++i) {
                     output << imid << ", " << topk_imid[0] << ", " << inlier_number[0] << endl;
-                    // output << dbimgs_it << ", " << dbimgs[topk_imid[i-1]] << ", " << topk_scores[i-1] << endl;
                 }
             }
         }
@@ -296,7 +300,9 @@ int main(int argc, char* argv[]) {
     std::string output;
     std::string scene_output;
     std::string des_path;
+    std::string corrs_img_path;
     int topk;
+    int tolerate;
 
     po::options_description desc("LCD Engine");
     desc.add_options()
@@ -304,8 +310,9 @@ int main(int argc, char* argv[]) {
         ("parameters", po::value<std::string>(&parameters)->required(), "path to a yaml file that contains parameters.")
         ("img_list", po::value<std::string>(&img_list)->required(), "input list directory.")
         ("output,o", po::value<std::string>(&output)->required(), "output path to pairs text file")
-        ("des-path", po::value<std::string>(&des_path)->required(), "folder of descriptor files")
-        ("topk", po::value<int>(&topk)->default_value(2), "max number of images per query in output pairs");
+        ("des-path", po::value<std::string>(&des_path)->required(), "folder of descriptor files")        
+        ("topk", po::value<int>(&topk)->default_value(2), "max number of images per query in output pairs")
+        ("corrs-img-path", po::value<std::string>(&corrs_img_path)->default_value(""), "path to save the image of correspondence"); 
     po::variables_map vm;
     try {
         po::store(po::parse_command_line(argc, argv, desc), vm);

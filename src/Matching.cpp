@@ -21,13 +21,12 @@ using std::cout;
 using std::endl;
 
 
-constexpr int default_ransacReprojThreshold = 5; // �Cinlier rate�ĪG���n(RANSAC reprojection error)
-//int default_ransacReprojThreshold = 10; // �b��inlier rate�ĪG���n
+constexpr int default_ransacReprojThreshold = 5; // (RANSAC reprojection error)
 constexpr int default_maxIters = 200000;
 constexpr double default_confidence = 0.995;
 
 
-void draw_correspondence_vertical(
+void Matcher::draw_correspondence_vertical(
     const std::string &img1_path, 
     const std::string &img2_path, 
     const std::vector<cv::Point2f> &ori, 
@@ -88,14 +87,27 @@ void draw_correspondence_vertical(
     // Save the result
     cv::imwrite(img_save_path, img_matches);
 }
-void draw_correspondence_horizontal(
-	const cv::Mat &img1, 
-	const cv::Mat &img2, 
+void Matcher::draw_correspondence_horizontal(
+    const std::string &img1_path, 
+    const std::string &img2_path, 
 	const std::vector<cv::Point2f> &ori, 
 	const std::vector<cv::Point2f> &tar,
-	std::string img_save_path)
+	const std::string &img_save_path)
 {
-	// Convert your point vectors to keypoints
+    // Read images in RGB mode
+    cv::Mat img1 = cv::imread(img1_path, cv::IMREAD_COLOR);
+    cv::Mat img2 = cv::imread(img2_path, cv::IMREAD_COLOR);
+
+    if (img1.empty() || img2.empty()) {
+        std::cerr << "Error: Could not read one or both images." << endl;
+        return;
+    }
+
+    // Convert BGR to RGB (OpenCV reads images in BGR by default)
+    // cv::cvtColor(img1, img1, cv::COLOR_BGR2RGB);
+    // cv::cvtColor(img2, img2, cv::COLOR_BGR2RGB);
+    
+    // Convert your point vectors to keypoints
 	std::vector<cv::KeyPoint> keypoints1, keypoints2;
 	for (const auto& pt : ori) {
 		keypoints1.push_back(cv::KeyPoint(pt, 1.0f));
@@ -141,10 +153,10 @@ Matcher::Matcher(std::string &angle_model_path, std::string &length_model_path) 
     minHessian = 400;
     keepNumPoints = 1000;
     detector = cv::xfeatures2d::SURF::create(minHessian);
-    // knnMatcher = cv::FlannBasedMatcher::create();
-    cv::Ptr<cv::flann::IndexParams> indexParams = cv::makePtr<cv::flann::KDTreeIndexParams>(1);
-    cv::Ptr<cv::flann::SearchParams> searchParams = cv::makePtr<cv::flann::SearchParams>(32);
-    knnMatcher = cv::makePtr<cv::FlannBasedMatcher>(indexParams, searchParams);
+    knnMatcher = cv::FlannBasedMatcher::create();
+    // cv::Ptr<cv::flann::IndexParams> indexParams = cv::makePtr<cv::flann::KDTreeIndexParams>(1);
+    // cv::Ptr<cv::flann::SearchParams> searchParams = cv::makePtr<cv::flann::SearchParams>(32);
+    // knnMatcher = cv::makePtr<cv::FlannBasedMatcher>(indexParams, searchParams);
 }
 void Matcher::getCorrespondeces(
     const cv::Mat& img1,
@@ -291,9 +303,7 @@ int Matcher::getInlierIndices(
 double Matcher::matchingDraw(
     const std::string &img1_path, 
     const std::string &img2_path, 
-    std::chrono::duration<double, std::milli> &surf_duration,
-    std::chrono::duration<double, std::milli> &svm_duration,
-	std::string &img_save_path)
+	const std::string &img_save_path)
 {
     cv::Mat img1 = cv::imread(img1_path, cv::IMREAD_GRAYSCALE);
     cv::Mat img2 = cv::imread(img2_path, cv::IMREAD_GRAYSCALE);
@@ -306,8 +316,8 @@ double Matcher::matchingDraw(
     auto start = std::chrono::high_resolution_clock::now();
     getCorrespondeces(img1, img2, points1, points2);
     auto end = std::chrono::high_resolution_clock::now();
-    surf_duration = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
-    draw_correspondence_vertical(img1_path, img2_path, points1, points2, img_save_path);
+    // surf_duration = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
+    draw_correspondence_horizontal(img1_path, img2_path, points1, points2, img_save_path+".before.png");
 	start = std::chrono::high_resolution_clock::now();
 	std::vector<int> inlier_indices;
     int angle_range, len_range;
@@ -318,8 +328,8 @@ double Matcher::matchingDraw(
 		tar[i] = points2[inlier_indices[i]];
 	}
 	end = std::chrono::high_resolution_clock::now();
-	svm_duration = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
-	//draw_correspondence_vertical(img1_path, img2_path, ori, tar, img_save_path);
+	// svm_duration = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
+	draw_correspondence_horizontal(img1_path, img2_path, ori, tar, img_save_path+".after.png");
     return inlier_indices.size();
 }
 // 儲存用於建立correspondence的SURF特徵資訊
@@ -440,24 +450,18 @@ void Matcher::saveCorrespondence(
 {
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "無法開啟檔案來寫入: " << filename << endl;
+        std::cerr << "無法開啟檔案來寫入: " << filename << std::endl;
         return;
     }
 
     // 先寫入點的數量
     size_t n_points = src_points.size();
-    file.write(reinterpret_cast<char*>(&n_points), sizeof(size_t));
+    file << n_points << std::endl;
 
     // 寫入所有點的座標
     for (size_t i = 0; i < n_points; i++) {
-        float x1 = src_points[i].x;
-        float y1 = src_points[i].y;
-        float x2 = tgt_points[i].x;
-        float y2 = tgt_points[i].y;
-        file.write(reinterpret_cast<char*>(&x1), sizeof(float));
-        file.write(reinterpret_cast<char*>(&y1), sizeof(float));
-        file.write(reinterpret_cast<char*>(&x2), sizeof(float));
-        file.write(reinterpret_cast<char*>(&y2), sizeof(float));
+        file << src_points[i].x << " " << src_points[i].y << " "
+             << tgt_points[i].x << " " << tgt_points[i].y << std::endl;
     }
     file.close();
 }
