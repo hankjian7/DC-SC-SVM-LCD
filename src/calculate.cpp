@@ -82,7 +82,7 @@ vector<int> cal_frequency_descending(const vector<double>& input, vector<double>
 		int max = frequency[0];
 		max += i;
 		node[idx].index = idx + 1;
-		if (0 <= max && max < tmp_vec.size()) node[idx].value = tmp_vec[max];
+		if (0 <= max && max < tmp_vec.size()) node[idx].value = tmp_vec[max] / input.size();
 		idx++;
 	} // for
 
@@ -232,4 +232,5 @@ classificationPair classification_model(vector<int> ground_truth, vector<int> me
 
 	cout << "TP is " << tp << " and TN is " << tn << " and FP is " << fp << " and FN is " << fn << endl;
 	return classification;
+
 }
